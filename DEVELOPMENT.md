@@ -603,6 +603,28 @@ $ ssh sgc.games dakara
 | Rare | 5 per faction | tartarus, ori, langara |
 | Secret | 3 per faction | kheb, othala, celestis |
 
+### Superweapons — SGC Command Unlocks
+
+Certain SGC commands unlock **faction superweapons** — devastating one-time abilities that change the course of the war. These are rare, earned through play, and announced to the entire battlefield when activated.
+
+| Command | Weapon | Effect | Unlock Condition |
+|---------|--------|--------|-----------------|
+| `ssh sgc.games antarctica` | **Ancient Drone Swarm** | Launches a wave of golden drones from your gate. Each drone (`.` yellow) homes in on the nearest enemy and deals 5x damage on impact. 20 drones total. | Faction holds >50% territory for 5+ consecutive minutes |
+| `ssh sgc.games dakara-weapon` | **Dakara Superweapon** | Massive energy wave radiates outward from center. All enemy ships within 80 tiles of world center take 50% of their max HP as damage. Visual: expanding ring of white `=` characters. | Faction controls Dakara planet + >3 players connected through it |
+| `ssh sgc.games ori-beam` | **Ori Satellite Beam** | A sustained vertical beam sweeps slowly across the battlefield (left to right over 10 seconds). Destroys any enemy ship it touches. Visual: bright white column `║` moving across screen. | Connect through Ori planet during The Reckoning phase (day 6-7) |
+| `ssh sgc.games replicator-swarm` | **Replicator Outbreak** | Spawns 30 neutral replicator ships (`%` grey) that attack ALL factions equally — including yours. Chaotic but clears the field. Ships that survive gain +20% HP. | Faction is in last place for 10+ minutes (desperation move) |
+| `ssh sgc.games asgard-legacy` | **Asgard Core Overload** | One random Asgard ship sacrifices itself in a massive explosion (15-tile radius). All enemy ships in range are destroyed. All friendly ships in range are fully healed. | Asgard-only. Requires 5+ Asgard ships alive. |
+| `ssh sgc.games horizon` | **Horizon Weapon** | Fires 6 gate-buster warheads at each enemy gate. Each warhead destroys ships within 5 tiles of the gate and disables spawning for that gate for 15 seconds. | Tau'ri-only. Requires coordinated strike to have been used 3 times this season. |
+| `ssh sgc.games kull` | **Kull Warriors** | Spawns 5 Kull warrior ships (black `##`, HP 500, damage 20, slow). Nearly unkillable — they have 80% damage resistance. Last 30 seconds then self-destruct. | Goa'uld-only. Requires >8 Goa'uld players online simultaneously. |
+| `ssh sgc.games hatak-fleet` | **Ha'tak Armada** | All Goa'uld ships temporarily gain shield visual `[=]` and take 75% less damage for 15 seconds. New ships spawn at 3x rate during this period. | Goa'uld-only. Available once per season when losing by >15% territory. |
+
+**Superweapon rules**:
+- Each superweapon has a **once-per-season** cooldown (or specific unlock conditions)
+- Activation is announced to ALL players: `"THE TAU'RI HAVE ACTIVATED THE ANCIENT DRONE SWARM!"`
+- Visual effects are dramatic and full-screen — everyone sees the destruction
+- Superweapons are balanced by rarity and unlock conditions, not by being weak
+- The player who triggers it gets credit in season stats ("Superweapon Operator" award)
+
 ### Utility Commands
 
 | Command | What It Does |
@@ -613,6 +635,7 @@ $ ssh sgc.games dakara
 | `ssh sgc.games planets` | Live planet status: who's where |
 | `ssh sgc.games scores` | Faction leaderboard + season standings |
 | `ssh sgc.games lore` | In-universe backstory |
+| `ssh sgc.games weapons` | Superweapon status: which are available, cooldowns, unlock progress |
 
 ---
 
