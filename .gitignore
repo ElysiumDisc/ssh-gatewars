@@ -1,5 +1,6 @@
 # Compiled binaries
 /server
+/gatewars
 /ssh-gatewars
 *.exe
 

@@ -6,18 +6,180 @@
 
 ## Table of Contents
 
-1. [Core Concept](#core-concept)
-2. [Architecture](#architecture)
-3. [The Five Fleets](#the-five-fleets)
-4. [Simulation Engine](#simulation-engine)
-5. [Player Presence System](#player-presence-system)
-6. [Interaction System](#interaction-system)
-7. [SGC Command System — Planets](#sgc-command-system--planets)
-8. [Visual Design](#visual-design)
-9. [Seasons & Scoring](#seasons--scoring)
-10. [The Stargwent Bridge](#the-stargwent-bridge)
-11. [Security](#security)
-12. [Roadmap](#roadmap)
+1. [Dev Environment Setup](#dev-environment-setup)
+2. [Core Concept](#core-concept)
+3. [Architecture](#architecture)
+4. [The Five Fleets](#the-five-fleets)
+5. [Simulation Engine](#simulation-engine)
+6. [Player Presence System](#player-presence-system)
+7. [Interaction System](#interaction-system)
+8. [SGC Command System — Planets](#sgc-command-system--planets)
+9. [Visual Design](#visual-design)
+10. [Seasons & Scoring](#seasons--scoring)
+11. [The Stargwent Bridge](#the-stargwent-bridge)
+12. [Security](#security)
+13. [Roadmap](#roadmap)
+
+---
+
+## Dev Environment Setup
+
+Fresh Ubuntu laptop? Follow these steps to get everything running.
+
+### Prerequisites
+
+- Ubuntu (or any Debian-based Linux)
+- Git installed (`sudo apt install git`)
+- SSH key configured for GitHub (`ssh -T git@github.com` should work)
+
+### Step 1: Install Go (no sudo needed)
+
+Go installs to two folders in your home directory:
+
+```
+~/go-sdk/go/    <-- GOROOT: the Go compiler, tools, standard library
+~/go/           <-- GOPATH: where Go downloads modules and builds binaries
+```
+
+Download and extract Go (check https://go.dev/dl/ for latest version):
+
+```bash
+# Download Go
+wget https://go.dev/dl/go1.26.1.linux-amd64.tar.gz -O /tmp/go.tar.gz
+
+# Extract to ~/go-sdk (no sudo needed)
+mkdir -p ~/go-sdk
+tar -C ~/go-sdk -xzf /tmp/go.tar.gz
+rm /tmp/go.tar.gz
+
+# Create GOPATH directory
+mkdir -p ~/go
+```
+
+### Step 2: Add Go to your PATH
+
+Add these lines to the bottom of `~/.bashrc`:
+
+```bash
+# Go
+export PATH=$HOME/go-sdk/go/bin:$HOME/go/bin:$PATH
+export GOPATH=$HOME/go
+```
+
+Then reload:
+
+```bash
+source ~/.bashrc
+```
+
+### Step 3: Verify Go works
+
+```bash
+go version
+# Should print: go version go1.26.1 linux/amd64
+```
+
+### Step 4: Clone the project
+
+```bash
+cd ~
+git clone git@github.com:ElysiumDisc/ssh-gatewars.git
+cd ssh-gatewars
+```
+
+### Step 5: Download dependencies
+
+```bash
+go mod download
+```
+
+This pulls all Charm libraries (Wish, Bubbletea, Lipgloss) into `~/go/pkg/mod/`.
+
+### Step 6: Build the server
+
+```bash
+go build -o gatewars ./cmd/server/
+```
+
+This creates a single `gatewars` binary (~9.5 MB) in the project root.
+
+### Step 7: Run the server
+
+```bash
+# First run auto-generates an SSH host key in .ssh/
+./gatewars --port 2222
+```
+
+You should see:
+
+```
+INFO Starting SSH GateWars host=0.0.0.0 port=2222
+INFO Connect with: command="ssh -p 2222 localhost"
+```
+
+### Step 8: Connect and test
+
+Open a **second terminal** and connect:
+
+```bash
+ssh -p 2222 localhost
+```
+
+First time you'll get a host key prompt — type `yes`. You should see the faction selection screen.
+
+Press `1-5` to pick a faction and enter the battlefield. Press `q` to disconnect.
+
+### Step 9: Stop the server
+
+Back in the server terminal, press `Ctrl+C` for graceful shutdown.
+
+### Quick Reference
+
+| What | Command |
+|------|---------|
+| Build | `go build -o gatewars ./cmd/server/` |
+| Run | `./gatewars --port 2222` |
+| Connect | `ssh -p 2222 localhost` |
+| Run tests | `go test ./...` |
+| Format code | `gofmt -w .` |
+| Tidy deps | `go mod tidy` |
+| Add a dep | `go get github.com/some/package@latest` |
+
+### Directory Structure After Setup
+
+```
+~/
+├── go-sdk/go/              <-- Go compiler (GOROOT) — don't modify
+│   ├── bin/go, gofmt
+│   ├── src/                <-- Go standard library source
+│   └── pkg/                <-- Compiled standard library
+│
+├── go/                     <-- Go workspace (GOPATH)
+│   ├── bin/                <-- Installed Go binaries (tools)
+│   └── pkg/mod/            <-- Downloaded module cache
+│       ├── github.com/charmbracelet/wish@v1.4.7/
+│       ├── github.com/charmbracelet/bubbletea@v1.3.10/
+│       └── ...
+│
+└── ssh-gatewars/           <-- This project
+    ├── cmd/server/main.go
+    ├── internal/...
+    ├── go.mod, go.sum
+    ├── gatewars             <-- Compiled binary (gitignored)
+    └── .ssh/id_ed25519     <-- Auto-generated host key (gitignored)
+```
+
+### Troubleshooting
+
+**`go: command not found`** — Your PATH isn't set. Run `source ~/.bashrc` or check that the export lines are in `~/.bashrc`.
+
+**`ssh: connect to host localhost port 2222: Connection refused`** — Server isn't running. Start it with `./gatewars --port 2222`.
+
+**`WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED`** — The host key changed (maybe you deleted `.ssh/`). Fix with: `ssh-keygen -R "[localhost]:2222"`
+
+**`go mod download` is slow** — First download pulls ~50MB of deps. Subsequent builds use the cache in `~/go/pkg/mod/`.
+
+**Port already in use** — Another instance is running, or another service uses 2222. Use a different port: `./gatewars --port 3333` and `ssh -p 3333 localhost`.
 
 ---
 
@@ -551,26 +713,129 @@ Season 14 Results:
 
 ---
 
+## Running the Server
+
+### Local Development
+
+```bash
+cd ~/ssh-gatewars
+
+# Build
+go build -o gatewars ./cmd/server/
+
+# Run (auto-generates .ssh/id_ed25519 host key on first start)
+./gatewars --port 2222
+```
+
+The server starts three things:
+1. **Simulation engine** — runs in background goroutine, 10 ticks/sec, war is always happening
+2. **SSH server** — listens on port 2222, accepts connections
+3. *(future)* **HTTP API** — port 8080, read-only stats for Stargwent
+
+### Connecting
+
+```bash
+# From another terminal (or another machine on your LAN)
+ssh -p 2222 localhost
+
+# From another machine on your network
+ssh -p 2222 your-ip-address
+```
+
+### Server Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port` | `2222` | SSH listen port |
+| `--host` | `0.0.0.0` | Bind address (0.0.0.0 = all interfaces) |
+| `--key` | `.ssh/id_ed25519` | Host key path |
+
+### Production Deployment
+
+For the real `sgc.games` server:
+
+```bash
+# Build a release binary
+go build -o gatewars ./cmd/server/
+
+# Run on standard SSH port (needs root or capabilities)
+sudo setcap 'cap_net_bind_service=+ep' ./gatewars
+./gatewars --port 22 --key /etc/ssh-gatewars/host_key
+
+# Or run behind a reverse proxy on port 2222
+# and point sgc.games:22 -> localhost:2222
+```
+
+Systemd service file (save as `/etc/systemd/system/gatewars.service`):
+
+```ini
+[Unit]
+Description=SSH GateWars
+After=network.target
+
+[Service]
+Type=simple
+User=gatewars
+WorkingDirectory=/opt/ssh-gatewars
+ExecStart=/opt/ssh-gatewars/gatewars --port 2222 --key /opt/ssh-gatewars/.ssh/host_key
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+---
+
 ## The Stargwent Bridge (Phase 4)
 
-### In-Game Access — The Hidden Chevron
+### The Big Picture
 
-Inside Stargwent's **Rule Compendium**, the bottom-center chevron pulses amber. Clicking it dials in — chevron lock animation, kawoosh screen flash, system terminal opens with `ssh sgc.games`.
-
-### Stats API
+SSH GateWars and Stargwent are **two separate projects** that connect through a bridge:
 
 ```
-GET /api/status
+┌─────────────────────┐              ┌─────────────────────┐
+│  STARGWENT          │              │  SSH GATEWARS        │
+│  (Python/Pygame)    │              │  (Go/Wish)           │
+│                     │   HTTP API   │                      │
+│  Stats menu ───────────────────>   │  GET /api/status     │
+│  "DIAL IN" button   │              │  GET /api/player/:id │
+│       │             │              │                      │
+│       │ subprocess  │   SSH        │                      │
+│       └──────────────────────────> │  Port 2222           │
+│                     │              │                      │
+│  Card game          │              │  Space battle sim    │
+│  (offline/LAN)      │              │  (persistent server) │
+└─────────────────────┘              └─────────────────────┘
+```
+
+They share:
+- Same 5 factions (Tau'ri, Goa'uld, Jaffa, Lucian, Asgard)
+- Same color schemes and lore
+- Same universe — playing as Tau'ri in both feels connected
+
+### How the Hook Works
+
+#### 1. Stats API (GateWars side)
+
+GateWars runs an HTTP server alongside the SSH server, exposing read-only JSON:
+
+```
+GET http://sgc.games:8080/api/status
 {
-  "season": 14, "day": 5,
+  "season": 14,
+  "day": 5,
+  "phase": "war",
   "factions": {
     "tauri":  {"territory": 34.2, "players": 12, "ships": 847},
     "goauld": {"territory": 19.8, "players": 8,  "ships": 621},
-    ...
+    "jaffa":  {"territory": 24.1, "players": 5,  "ships": 512},
+    "lucian": {"territory": 13.7, "players": 7,  "ships": 398},
+    "asgard": {"territory": 8.2,  "players": 3,  "ships": 127}
   }
 }
 
-GET /api/player/{ssh_key_fingerprint}
+GET http://sgc.games:8080/api/player/{ssh_key_fingerprint}
 {
   "faction": "tauri",
   "seasons_played": 12,
@@ -580,11 +845,78 @@ GET /api/player/{ssh_key_fingerprint}
 }
 ```
 
-### Stargwent Integration
+File: `internal/api/stats_api.go` — simple `net/http` handler, reads from engine snapshot + SQLite.
 
-- Stats menu tab showing current season status
-- "DIAL IN" button launching SSH connection
-- Future: cosmetic card backs for winning faction's players
+#### 2. Stats Tab (Stargwent side)
+
+Stargwent's Stats menu gets a **"GateWars" tab** (7th tab) that:
+- Fetches `GET /api/status` on open
+- Shows current season, phase, faction territories with colored bars
+- Shows your personal stats if you have an SSH key configured
+- Has a "DIAL IN" button
+
+File to modify: `stargwent/stats_screen.py` (add tab) + new `stargwent/gatewars_stats.py`
+
+#### 3. The Hidden Chevron (Stargwent side)
+
+Inside Stargwent's **Rule Compendium**, the bottom-center chevron is special:
+- Pulses with a faint amber glow (like an active Stargate chevron)
+- Hover tooltip: *"SGC Tactical Network — Click to dial in. ssh sgc.games"*
+- Clicking triggers:
+  1. All 7 chevrons light up in sequence (animation)
+  2. Brief "kawoosh" screen flash
+  3. System terminal opens with SSH command
+
+File to modify: `stargwent/compendium_screen.py` (add chevron interaction)
+
+#### 4. Launching SSH (Stargwent side)
+
+The "DIAL IN" action opens a system terminal with the SSH command:
+
+```python
+import subprocess
+import sys
+import shutil
+
+def dial_in(host="sgc.games", port=22):
+    """Launch SSH GateWars in a system terminal."""
+    ssh_cmd = f"ssh -p {port} {host}"
+
+    if sys.platform == "linux":
+        # Try common terminal emulators
+        for term in ["gnome-terminal", "konsole", "xfce4-terminal", "xterm"]:
+            if shutil.which(term):
+                if term == "gnome-terminal":
+                    subprocess.Popen([term, "--", "bash", "-c", ssh_cmd])
+                else:
+                    subprocess.Popen([term, "-e", ssh_cmd])
+                return
+    elif sys.platform == "darwin":
+        # macOS
+        subprocess.Popen(["open", "-a", "Terminal", ssh_cmd])
+    elif sys.platform == "win32":
+        # Windows Terminal
+        subprocess.Popen(["wt", "ssh", f"-p {port}", host])
+
+    # Fallback: just print the command
+    print(f"Run this in a terminal: {ssh_cmd}")
+```
+
+#### 5. Web Build (Emscripten)
+
+On web builds, the chevron either:
+- **Doesn't appear** (cleanest — can't SSH from a browser)
+- **Opens a link** to a web terminal proxy (stretch goal — xterm.js + WebSocket bridge to SSH)
+
+Guard with `if sys.platform != "emscripten":` in Stargwent.
+
+### Implementation Order
+
+1. **First**: Build the HTTP stats API in GateWars (`internal/api/stats_api.go`)
+2. **Second**: Add the GateWars stats tab in Stargwent (read-only, just fetches JSON)
+3. **Third**: Add the "DIAL IN" button that launches SSH
+4. **Fourth**: Add the hidden chevron in the Rule Compendium with animation
+5. **Future**: Cosmetic rewards (card backs for winning faction players)
 
 ---
 
