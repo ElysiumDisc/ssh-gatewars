@@ -1,0 +1,21 @@
+# Compiled binaries
+/server
+/ssh-gatewars
+*.exe
+
+# SQLite database
+*.db
+*.db-wal
+*.db-shm
+
+# SSH host keys
+.ssh/
+
+# Go build cache
+/vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
