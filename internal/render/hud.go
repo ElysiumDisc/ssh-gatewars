@@ -23,7 +23,10 @@ func BuildHUD(factionID int, snap simulation.Snapshot, width int, renderer *lipg
 
 	ships := snap.ShipCounts[factionID]
 	players := snap.PlayerCounts[factionID]
-	territory := snap.Territory.Percents[factionID]
+	territory := 20.0
+	if snap.Territory != nil {
+		territory = snap.Territory.Percents[factionID]
+	}
 	kills := snap.KillCounts[factionID]
 	deaths := snap.DeathCounts[factionID]
 
@@ -45,9 +48,40 @@ func BuildHUD(factionID int, snap simulation.Snapshot, width int, renderer *lipg
 		line1 += dimStyle.Render(strings.Repeat("─", width-lipgloss.Width(line1)))
 	}
 
-	// Line 2: Stats
-	line2 := dimStyle.Render(fmt.Sprintf("  Kills: %d  |  Deaths: %d  |  Power: ", kills, deaths)) +
-		headerStyle.Render("READY [SPACE]")
+	// Line 2: Stats + power cooldown
+	ps := snap.PowerStatuses[factionID]
+	var powerStr string
+	switch ps.State {
+	case simulation.PowerReady:
+		powerStr = renderer.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true).Render("READY [SPACE]")
+	case simulation.PowerActive:
+		remaining := int(ps.Remaining.Seconds())
+		barW := 10
+		frac := 0.0
+		if ps.Total > 0 {
+			frac = float64(ps.Remaining) / float64(ps.Total)
+		}
+		filled := int(frac * float64(barW))
+		if filled > barW {
+			filled = barW
+		}
+		powerBar := headerStyle.Render(strings.Repeat("█", filled)) + dimStyle.Render(strings.Repeat("░", barW-filled))
+		powerStr = headerStyle.Render(fmt.Sprintf("ACTIVE %ds ", remaining)) + powerBar
+	case simulation.PowerCooldown:
+		remaining := int(ps.Remaining.Seconds())
+		barW := 10
+		frac := 0.0
+		if ps.Total > 0 {
+			frac = 1.0 - float64(ps.Remaining)/float64(ps.Total)
+		}
+		filled := int(frac * float64(barW))
+		if filled > barW {
+			filled = barW
+		}
+		powerBar := dimStyle.Render(strings.Repeat("░", barW-filled)) + barStyle.Render(strings.Repeat("█", filled))
+		powerStr = dimStyle.Render(fmt.Sprintf("CD %ds ", remaining)) + powerBar
+	}
+	line2 := dimStyle.Render(fmt.Sprintf("  Kills: %d  |  Deaths: %d  |  %s: ", kills, deaths, ps.Name)) + powerStr
 
 	// Line 3: Controls
 	line3 := dimStyle.Render("  [1-5] Focus sector  |  [Tab] Views  |  [?] Help  |  [q] Quit")

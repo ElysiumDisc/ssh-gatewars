@@ -48,7 +48,7 @@ SSH GateWars is an **ambient persistent faction war** rendered in the terminal o
 |-----|--------|
 | `Space` | Activate faction power (shared cooldown) |
 | `1-5` | Focus spawns toward a sector |
-| `Tab` | Cycle views (battlefield / scoreboard / stats) |
+| `Tab` | Cycle views (battlefield / scoreboard / network map / stats) |
 | `?` | Help overlay |
 | `q` | Disconnect |
 
@@ -78,6 +78,15 @@ go build -o gatewars ./cmd/server/
 ssh -p 2222 localhost
 ```
 
+### Quick Faction Login
+
+Skip the selection screen:
+
+```
+ssh tauri@sgc.games    # Jump straight into Tau'ri
+ssh asgard@sgc.games   # Join the Asgard fleet
+```
+
 ### Flags
 
 | Flag | Default | Description |
@@ -85,6 +94,12 @@ ssh -p 2222 localhost
 | `--port` | `2222` | SSH server port |
 | `--host` | `0.0.0.0` | Bind address |
 | `--key` | `.ssh/id_ed25519` | Host key path |
+| `--db` | `gatewars.db` | SQLite database path |
+| `--http` | `127.0.0.1:8080` | HTTP stats API address (empty to disable) |
+| `--max-sessions` | `500` | Maximum concurrent SSH sessions |
+| `--max-per-key` | `10` | Maximum sessions per SSH key |
+| `--connect-rate` | `10` | Max new connections per second |
+| `--idle-timeout` | `30m` | Idle session timeout |
 
 ## Tech Stack
 

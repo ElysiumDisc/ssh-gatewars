@@ -73,16 +73,27 @@ type Notification struct {
 	ExpiresAt time.Time
 }
 
+// BeamEffect represents a visual beam across the battlefield.
+type BeamEffect struct {
+	X1, Y1    float64 // start point
+	X2, Y2    float64 // end point
+	Faction   int
+	TicksLeft int
+}
+
 // Snapshot is a read-only copy of simulation state for rendering.
 type Snapshot struct {
 	Ships         []Ship
 	Explosions    []Explosion
+	Beams         []BeamEffect
 	Notifications []Notification
 	Territory     *TerritoryMap
+	PowerStatuses [faction.Count]PowerStatus
 	PlayerCounts  [faction.Count]int
 	ShipCounts    [faction.Count]int
 	KillCounts    [faction.Count]int
 	DeathCounts   [faction.Count]int
+	FocusVotes    [faction.Count][faction.Count]int // [voter_faction][target_sector]
 	Tick          uint64
 }
 
@@ -92,12 +103,14 @@ type Engine struct {
 
 	ships      []*Ship
 	explosions []Explosion
+	beams      []BeamEffect
 	nextID     uint64
 	tick       uint64
 
 	territory *TerritoryMap
 	spatial   SpatialHash
 
+	Powers       *PowerManager
 	playerCounts [faction.Count]int
 	killCounts   [faction.Count]int
 	deathCounts  [faction.Count]int
@@ -107,15 +120,20 @@ type Engine struct {
 	// Unique player tracking (SSH key -> faction)
 	players map[string]int
 
+	// Sector focus votes per player (SSH key -> sector 0-4, -1 = none)
+	focusVotes map[string]int
+
 	rng *rand.Rand
 }
 
 // NewEngine creates a simulation engine.
 func NewEngine() *Engine {
 	e := &Engine{
-		territory: NewTerritoryMap(),
-		players:   make(map[string]int),
-		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
+		territory:  NewTerritoryMap(),
+		players:    make(map[string]int),
+		focusVotes: make(map[string]int),
+		Powers:     NewPowerManager(),
+		rng:        rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 	// Seed initial ships so the war is already happening
 	e.seedInitialShips()
@@ -141,9 +159,26 @@ func (e *Engine) spawnShip(factionID int) {
 	f := faction.Factions[factionID]
 	gate := GatePositions[factionID]
 
-	// Heading toward center with random spread
-	center := Vec2{WorldW / 2, WorldH / 2}
-	dir := center.Sub(gate).Normalize()
+	// Determine heading: bias toward focused sector if votes exist
+	target := Vec2{WorldW / 2, WorldH / 2}
+	votes := e.calculateFocusVotes()
+	bestSector := -1
+	bestVotes := 0
+	for s := 0; s < faction.Count; s++ {
+		if votes[factionID][s] > bestVotes {
+			bestVotes = votes[factionID][s]
+			bestSector = s
+		}
+	}
+	if bestSector >= 0 {
+		// Blend: 60% toward focused sector gate, 40% toward center
+		sectorTarget := GatePositions[bestSector]
+		target = Vec2{
+			X: sectorTarget.X*0.6 + target.X*0.4,
+			Y: sectorTarget.Y*0.6 + target.Y*0.4,
+		}
+	}
+	dir := target.Sub(gate).Normalize()
 
 	// Add +/-30 degree random spread
 	angle := (e.rng.Float64() - 0.5) * math.Pi / 3
@@ -228,23 +263,30 @@ func (e *Engine) Run(ctx context.Context) {
 				}
 			}
 
-			// 4. Combat
+			// 4. Apply active power effects to movement
+			e.applyPowerMovementEffects()
+
+			// 5. Combat (with power modifiers)
 			e.resolveCombat(dt)
 
-			// 5. Process explosions
-			e.processExplosions()
+			// 6. Fire Asgard Ion Cannon if just activated
+			e.processIonCannon()
 
-			// 6. Remove dead ships
+			// 7. Process explosions + beam effects
+			e.processExplosions()
+			e.processBeams()
+
+			// 8. Remove dead ships
 			e.removeDeadShips()
 
-			// 7. Territory (every 10 ticks = 1 second)
+			// 9. Territory (every 10 ticks = 1 second)
 			territoryTimer++
 			if territoryTimer >= TickRate {
 				territoryTimer = 0
 				e.territory = CalculateTerritory(e.ships)
 			}
 
-			// 8. Expire notifications
+			// 10. Expire notifications
 			now := time.Now()
 			alive := e.notifications[:0]
 			for _, n := range e.notifications {
@@ -343,6 +385,14 @@ func (e *Engine) moveShips(dt float64) {
 			}
 		}
 
+		// Record trail (shift old positions, store current)
+		if s.TrailLen < 3 {
+			s.TrailLen++
+		}
+		s.Trail[2] = s.Trail[1]
+		s.Trail[1] = s.Trail[0]
+		s.Trail[0] = Vec2{s.X, s.Y}
+
 		// Update position
 		s.X += s.VX * dt
 		s.Y += s.VY * dt
@@ -366,23 +416,65 @@ func (e *Engine) moveShips(dt float64) {
 }
 
 func (e *Engine) resolveCombat(dt float64) {
+	// Pre-calculate Tau'ri coordinated strike target
+	var tauriTarget *Ship
+	if e.Powers.IsActive(faction.Tauri) {
+		// Find Tau'ri centroid
+		var cx, cy float64
+		var tc int
+		for _, s := range e.ships {
+			if s.Faction == faction.Tauri && s.State == Alive {
+				cx += s.X
+				cy += s.Y
+				tc++
+			}
+		}
+		if tc > 0 {
+			cx /= float64(tc)
+			cy /= float64(tc)
+			// Find nearest enemy to centroid
+			minD := math.MaxFloat64
+			for _, s := range e.ships {
+				if s.Faction == faction.Tauri || s.State != Alive {
+					continue
+				}
+				dx := s.X - cx
+				dy := s.Y - cy
+				d := dx*dx + dy*dy
+				if d < minD {
+					minD = d
+					tauriTarget = s
+				}
+			}
+		}
+	}
+
 	for _, s := range e.ships {
 		if s.State != Alive {
 			continue
 		}
 
-		enemies := e.spatial.QueryRadius(s.X, s.Y, AttackRange)
 		var target *Ship
-		minDist := math.MaxFloat64
 
-		for _, other := range enemies {
-			if other.Faction == s.Faction || other.State != Alive {
-				continue
+		// Tau'ri Coordinated Strike: all ships lock same target if in range
+		if s.Faction == faction.Tauri && tauriTarget != nil {
+			if Dist(s, tauriTarget) <= AttackRange*2 {
+				target = tauriTarget
 			}
-			d := Dist(s, other)
-			if d < minDist {
-				minDist = d
-				target = other
+		}
+
+		if target == nil {
+			enemies := e.spatial.QueryRadius(s.X, s.Y, AttackRange)
+			minDist := math.MaxFloat64
+			for _, other := range enemies {
+				if other.Faction == s.Faction || other.State != Alive {
+					continue
+				}
+				d := Dist(s, other)
+				if d < minDist {
+					minDist = d
+					target = other
+				}
 			}
 		}
 
@@ -405,11 +497,31 @@ func (e *Engine) resolveCombat(dt float64) {
 			rawDamage *= 1.0 + bonus
 		}
 
+		// Goa'uld Bombardment: 2x damage while active
+		if s.Faction == faction.Goauld && e.Powers.IsActive(faction.Goauld) {
+			rawDamage *= 2.0
+		}
+
+		// Lucian Kassa Rush: +50% attack speed
+		if s.Faction == faction.Lucian && e.Powers.IsActive(faction.Lucian) {
+			rawDamage *= 1.5
+		}
+
 		// Goa'uld shield matrix: rear ships take 50% less
 		if target.Faction == faction.Goauld {
 			if !e.isFrontRow(target) {
 				rawDamage *= 0.5
 			}
+		}
+
+		// Jaffa Kree!: ignore incoming damage
+		if target.Faction == faction.Jaffa && e.Powers.IsActive(faction.Jaffa) {
+			continue // skip damage to Jaffa during Kree!
+		}
+
+		// Lucian Kassa Rush: take +25% more damage
+		if target.Faction == faction.Lucian && e.Powers.IsActive(faction.Lucian) {
+			rawDamage *= 1.25
 		}
 
 		// Underdog bonus
@@ -545,15 +657,28 @@ func (e *Engine) Snapshot() Snapshot {
 		}
 	}
 
+	beams := make([]BeamEffect, len(e.beams))
+	copy(beams, e.beams)
+
+	var powerStatuses [faction.Count]PowerStatus
+	for i := 0; i < faction.Count; i++ {
+		powerStatuses[i] = e.Powers.Status(i)
+	}
+
+	focusVotes := e.calculateFocusVotes()
+
 	snap := Snapshot{
 		Ships:         ships,
 		Explosions:    explosions,
+		Beams:         beams,
 		Notifications: notifications,
 		Territory:     e.territory,
+		PowerStatuses: powerStatuses,
 		PlayerCounts:  e.playerCounts,
 		ShipCounts:    shipCounts,
 		KillCounts:    e.killCounts,
 		DeathCounts:   e.deathCounts,
+		FocusVotes:    focusVotes,
 		Tick:          e.tick,
 	}
 	return snap
@@ -583,7 +708,183 @@ func (e *Engine) UnregisterPlayer(sshKey string) {
 			e.playerCounts[f] = 0
 		}
 		delete(e.players, sshKey)
+		delete(e.focusVotes, sshKey)
 	}
+}
+
+// SetFocusSector sets a player's sector focus vote (-1 to clear).
+func (e *Engine) SetFocusSector(sshKey string, sector int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if sector < 0 || sector >= faction.Count {
+		delete(e.focusVotes, sshKey)
+	} else {
+		e.focusVotes[sshKey] = sector
+	}
+}
+
+// AddNotification broadcasts a message to a faction.
+func (e *Engine) AddNotification(factionID int, msg string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	now := time.Now()
+	e.notifications = append(e.notifications, Notification{
+		Faction:   factionID,
+		Message:   msg,
+		CreatedAt: now,
+		ExpiresAt: now.Add(4 * time.Second),
+	})
+}
+
+// calculateFocusVotes tallies sector votes per faction.
+func (e *Engine) calculateFocusVotes() [faction.Count][faction.Count]int {
+	var votes [faction.Count][faction.Count]int
+	for key, sector := range e.focusVotes {
+		if f, ok := e.players[key]; ok {
+			votes[f][sector]++
+		}
+	}
+	return votes
+}
+
+// applyPowerMovementEffects modifies ship movement based on active powers.
+func (e *Engine) applyPowerMovementEffects() {
+	// Goa'uld Bombardment: freeze all Goa'uld ships
+	if e.Powers.IsActive(faction.Goauld) {
+		for _, s := range e.ships {
+			if s.Faction == faction.Goauld && s.State == Alive {
+				s.VX = 0
+				s.VY = 0
+			}
+		}
+	}
+
+	// Jaffa Kree!: max speed toward nearest enemy
+	if e.Powers.IsActive(faction.Jaffa) {
+		for _, s := range e.ships {
+			if s.Faction == faction.Jaffa && s.State == Alive {
+				// Double speed
+				vel := Vec2{s.VX, s.VY}
+				speed := vel.Len()
+				if speed > 0.1 {
+					maxSpeed := float64(faction.Factions[faction.Jaffa].BaseSpeed) * 2.5
+					vel = vel.Normalize().Scale(maxSpeed)
+					s.VX = vel.X
+					s.VY = vel.Y
+				}
+				s.Boosted = true
+			}
+		}
+	} else {
+		for _, s := range e.ships {
+			if s.Faction == faction.Jaffa {
+				s.Boosted = false
+			}
+		}
+	}
+}
+
+// processIonCannon fires the Asgard ion cannon beam when first activated.
+func (e *Engine) processIonCannon() {
+	if !e.Powers.IsActive(faction.Asgard) {
+		return
+	}
+
+	// Only fire on the first tick of activation (check if beam already exists)
+	for _, b := range e.beams {
+		if b.Faction == faction.Asgard {
+			return // already fired this activation
+		}
+	}
+
+	// Find a random Asgard ship to fire from
+	var firingShip *Ship
+	for _, s := range e.ships {
+		if s.Faction == faction.Asgard && s.State == Alive {
+			firingShip = s
+			break
+		}
+	}
+	if firingShip == nil {
+		return
+	}
+
+	// Find the nearest enemy cluster center
+	var ex, ey float64
+	var enemyCount int
+	for _, s := range e.ships {
+		if s.Faction != faction.Asgard && s.State == Alive {
+			ex += s.X
+			ey += s.Y
+			enemyCount++
+		}
+	}
+	if enemyCount == 0 {
+		return
+	}
+	ex /= float64(enemyCount)
+	ey /= float64(enemyCount)
+
+	// Create beam from firing ship toward enemy cluster, extending through
+	dir := Vec2{ex - firingShip.X, ey - firingShip.Y}.Normalize()
+	endX := firingShip.X + dir.X*500 // extend far past target
+	endY := firingShip.Y + dir.Y*500
+
+	e.beams = append(e.beams, BeamEffect{
+		X1: firingShip.X, Y1: firingShip.Y,
+		X2: endX, Y2: endY,
+		Faction:   faction.Asgard,
+		TicksLeft: 10, // 1 second
+	})
+
+	// Damage all enemies within 3 tiles of the beam line
+	beamDmg := float64(faction.Factions[faction.Asgard].BaseDamage) * 3
+	for _, s := range e.ships {
+		if s.Faction == faction.Asgard || s.State != Alive {
+			continue
+		}
+		if distToLine(s.X, s.Y, firingShip.X, firingShip.Y, ex, ey) < 3.0 {
+			s.HP -= float32(beamDmg)
+			if s.HP <= 0 {
+				s.State = Exploding
+				s.HP = 0
+				s.ExplodeFrame = 0
+				s.ExplodeTicks = ExplodeTicksPerFrame
+				e.killCounts[faction.Asgard]++
+				e.deathCounts[s.Faction]++
+			}
+		}
+	}
+}
+
+func (e *Engine) processBeams() {
+	remaining := e.beams[:0]
+	for i := range e.beams {
+		e.beams[i].TicksLeft--
+		if e.beams[i].TicksLeft > 0 {
+			remaining = append(remaining, e.beams[i])
+		}
+	}
+	e.beams = remaining
+}
+
+// distToLine returns the distance from point (px,py) to line segment (x1,y1)-(x2,y2).
+func distToLine(px, py, x1, y1, x2, y2 float64) float64 {
+	dx := x2 - x1
+	dy := y2 - y1
+	lenSq := dx*dx + dy*dy
+	if lenSq < 0.0001 {
+		return math.Sqrt((px-x1)*(px-x1) + (py-y1)*(py-y1))
+	}
+	t := ((px-x1)*dx + (py-y1)*dy) / lenSq
+	if t < 0 {
+		t = 0
+	} else if t > 1 {
+		t = 1
+	}
+	closestX := x1 + t*dx
+	closestY := y1 + t*dy
+	return math.Sqrt((px-closestX)*(px-closestX) + (py-closestY)*(py-closestY))
 }
 
 // SpatialHash is a grid-based spatial index for fast neighbor queries.

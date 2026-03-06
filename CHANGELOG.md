@@ -4,6 +4,74 @@ All notable changes to SSH GateWars will be documented in this file.
 
 ---
 
+## [0.5.0] — 2026-03-06
+
+### Added
+
+**Phase 2 — Powers & Interaction**
+- 5 faction powers with shared cooldowns and state machine (Ready → Active → Cooldown)
+  - Tau'ri: Coordinated Strike — all ships lock same target for 5s
+  - Goa'uld: Bombardment — ships freeze, deal 2x damage for 5s
+  - Jaffa: Kree! — max speed, ignore incoming damage for 8s
+  - Lucian: Kassa Rush — +50% attack speed, +25% damage taken for 10s
+  - Asgard: Ion Cannon — piercing beam across battlefield, instant
+- Space bar activates faction power with cross-session notifications
+- Power cooldown bar in HUD (visual progress bar replaces static text)
+- Sector focus voting (keys 1-5 bias spawn heading toward target sector)
+- Tau'ri coordinated strike target override in combat system
+- Beam rendering (Bresenham line drawing with directional characters ═/║)
+- Ship trails (3-position fading trail behind moving ships)
+- Power visual effects:
+  - Jaffa Kree!: bright yellow ship highlighting when boosted
+  - Lucian Kassa Rush: alternating purple/red background tint
+  - Goa'uld Bombardment: ships freeze in place
+  - Asgard Ion Cannon: cyan beam line across battlefield with area damage
+- Tab view cycling: battlefield → scoreboard → network map → stats
+- Network map view (territory overview with colored sector blocks + gate positions)
+- Help overlay with controls and faction power description (? key)
+
+**Faction-as-Username Login**
+- `ssh tauri@sgc.games` skips faction selection, jumps to battlefield
+- Supports all 5 faction names as SSH usernames
+
+**Multiplex Views**
+- `ssh sgc.games scoreboard` — full-screen live faction scoreboard
+- `ssh sgc.games network` — stargate network territory map
+- `ssh sgc.games stats` — personal stats and session info
+- Same SSH key = 1 player for spawn rate (sessions deduplicated)
+- Primary session has full controls, additional sessions are view-only
+
+**SQLite Persistence**
+- Player identity saved across sessions (SSH fingerprint → faction)
+- Returning players auto-join their previous faction
+- Faction stats table for lifetime kills/deaths tracking
+- Pure Go SQLite (modernc.org/sqlite, no CGO required)
+- WAL mode for concurrent read/write access
+
+**HTTP Stats API**
+- JSON endpoint at `/stats` on configurable address (default 127.0.0.1:8080)
+- Returns live faction data: players, ships, territory %, kills, deaths
+- CORS headers for web integration
+- Read-only, no mutations exposed
+
+**Security Hardening**
+- Connection rate limiter (token bucket, configurable connections/sec)
+- Maximum concurrent session cap (default 500)
+- Per-SSH-key session cap (default 10, prevents abuse)
+- Idle timeout (30 min default, view-only sessions exempt)
+- Whitelist-only input handling (q, space, 1-5, tab, ?)
+- SSH commands matched against fixed registry map
+- Parameterized SQL queries only
+- DB file created with owner-only permissions
+
+**Build & Operations**
+- Makefile with build/run/clean targets
+- Configurable server flags: --db, --http, --max-sessions, --max-per-key, --connect-rate, --idle-timeout
+- Graceful shutdown handles server close without fatal errors
+- spawner.go with spawn configuration constants
+
+---
+
 ## [0.1.0] — 2026-03-06
 
 ### Added

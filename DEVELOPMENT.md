@@ -1,6 +1,6 @@
 # SSH GateWars — Development Guide
 
-> v0.1.0 — Phase 0+1 Complete, Phase 2 In Progress
+> v0.5.0 — Phase 0+1+2 Complete
 
 ---
 
@@ -247,8 +247,9 @@ main goroutine
   ├── Wish SSH server goroutine
   │     ├── Session 1 (Bubbletea model, reads Engine.Snapshot())
   │     ├── Session 2 ...
-  │     └── ...
-  └── HTTP stats API (future)
+  │     └── ... (per-session idle timeout monitors)
+  ├── HTTP stats API goroutine (:8080/stats)
+  └── ConnLimiter (rate limiting + session caps)
 ```
 
 ### Concurrency Model
@@ -276,23 +277,28 @@ ssh-gatewars/
     server/
       ssh.go                        -- SSH key extraction, server struct
       session.go                    -- per-player Bubbletea model, state machine
+      limiter.go                    -- connection rate limiting, session caps
     simulation/
       engine.go                     -- tick loop, spatial hash, spawn, move, combat
       ship.go                       -- ship entity, Vec2, distance helpers
       territory.go                  -- zone ownership, territory calculation
-      faction_power.go              -- active abilities, cooldowns (Phase 2)
+      faction_power.go              -- active abilities, cooldowns
+      spawner.go                    -- spawn configuration constants
     render/
       starfield.go                  -- procedural background generation
       viewport.go                   -- world-to-screen coordinate mapping
-      frame.go                      -- frame builder: starfield + ships + effects
-      hud.go                        -- bottom status bar
-      effects.go                    -- explosions, beams (Phase 2)
+      frame.go                      -- frame builder: starfield + trails + ships + beams
+      hud.go                        -- bottom status bar with power cooldown
+      effects.go                    -- explosion/trail constants
     faction/
       factions.go                   -- 5 faction definitions, colors, symbols, stats
     player/
-      identity.go                   -- SQLite persistence (Phase 1.5)
+      identity.go                   -- SQLite persistence (player identity, faction stats)
+    httpapi/
+      stats.go                      -- HTTP JSON stats API (/stats endpoint)
   db/migrations/
-    001_initial.sql                 -- schema (Phase 1.5)
+    001_initial.sql                 -- reference schema (embedded in identity.go)
+  Makefile
   .gitignore
   go.mod, go.sum
   README.md, CHANGELOG.md, DEVELOPMENT.md
@@ -753,7 +759,7 @@ go build -o gatewars ./cmd/server/
 The server starts three things:
 1. **Simulation engine** — runs in background goroutine, 10 ticks/sec, war is always happening
 2. **SSH server** — listens on port 2222, accepts connections
-3. *(future)* **HTTP API** — port 8080, read-only stats for Stargwent
+3. **HTTP stats API** — port 8080, read-only JSON stats at `/stats`
 
 ### Connecting
 
@@ -761,8 +767,13 @@ The server starts three things:
 # From another terminal (or another machine on your LAN)
 ssh -p 2222 localhost
 
-# From another machine on your network
-ssh -p 2222 your-ip-address
+# Quick faction join (skip faction select)
+ssh -p 2222 tauri@localhost
+
+# Multiplex views
+ssh -p 2222 localhost scoreboard
+ssh -p 2222 localhost network
+ssh -p 2222 localhost stats
 ```
 
 ### Server Flags
@@ -772,6 +783,12 @@ ssh -p 2222 your-ip-address
 | `--port` | `2222` | SSH listen port |
 | `--host` | `0.0.0.0` | Bind address (0.0.0.0 = all interfaces) |
 | `--key` | `.ssh/id_ed25519` | Host key path |
+| `--db` | `gatewars.db` | SQLite database path |
+| `--http` | `127.0.0.1:8080` | HTTP stats API address (empty to disable) |
+| `--max-sessions` | `500` | Maximum concurrent SSH sessions |
+| `--max-per-key` | `10` | Maximum sessions per SSH key |
+| `--connect-rate` | `10` | Max new connections per second |
+| `--idle-timeout` | `30m` | Idle session timeout (view-only exempt) |
 
 ### Production Deployment
 
@@ -800,7 +817,7 @@ After=network.target
 Type=simple
 User=gatewars
 WorkingDirectory=/opt/ssh-gatewars
-ExecStart=/opt/ssh-gatewars/gatewars --port 2222 --key /opt/ssh-gatewars/.ssh/host_key
+ExecStart=/opt/ssh-gatewars/gatewars --port 2222 --key /opt/ssh-gatewars/.ssh/host_key --db /opt/ssh-gatewars/data/gatewars.db --http 127.0.0.1:8080
 Restart=always
 RestartSec=5
 
@@ -974,18 +991,17 @@ Guard with `if sys.platform != "emscripten":` in Stargwent.
 
 - [x] Phase 0: SSH server, starfield, moving ships, terminal resize
 - [x] Phase 0+1: Simulation engine, combat, factions, spawning, territory, HUD
-
-### In Progress
-
-- [ ] Phase 2: Faction powers, sector focus, tab views, multiplex sessions
+- [x] Phase 1.5: SQLite persistence (player identity across sessions)
+- [x] Phase 2: Faction powers, sector focus, tab views, multiplex sessions
+- [x] Security: Rate limiting, session caps, idle timeout, input whitelisting
+- [x] HTTP stats API (/stats endpoint)
 
 ### Planned
 
-- [ ] Phase 1.5: SQLite persistence (player identity across sessions)
 - [ ] Phase 2.5: Planet system (SSH command routing, bonuses, capacity)
-- [ ] Phase 3: Seasons & scoring (7-day cycles, leaderboards)
-- [ ] Phase 4: Stargwent bridge (chevron UI, stats API)
-- [ ] Phase 5: Polish (parallax starfield, beam effects, wormhole animation)
+- [ ] Phase 3: Seasons & scoring (7-day cycles, leaderboards), spectator mode, MOTD, bots
+- [ ] Phase 4: Stargwent bridge (chevron UI, stats integration)
+- [ ] Phase 5: Docker deployment, superweapons, parallax starfield
 
 ---
 

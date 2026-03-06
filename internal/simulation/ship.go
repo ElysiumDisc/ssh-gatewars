@@ -28,6 +28,10 @@ type Ship struct {
 	// Explosion animation
 	ExplodeFrame int // 0-3
 	ExplodeTicks int // ticks remaining on current frame
+
+	// Trail: last 3 positions for fading trail effect
+	Trail     [3]Vec2
+	TrailLen  int // how many trail entries are valid (0-3)
 }
 
 // Vec2 is a simple 2D vector.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,6 +18,8 @@ import (
 	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/muesli/termenv"
 
+	"ssh-gatewars/internal/httpapi"
+	"ssh-gatewars/internal/player"
 	"ssh-gatewars/internal/render"
 	"ssh-gatewars/internal/server"
 	"ssh-gatewars/internal/simulation"
@@ -26,7 +29,23 @@ func main() {
 	port := flag.Int("port", 2222, "SSH server port")
 	host := flag.String("host", "0.0.0.0", "SSH server host")
 	keyPath := flag.String("key", ".ssh/id_ed25519", "SSH host key path")
+	dbPath := flag.String("db", "gatewars.db", "SQLite database path")
+	httpAddr := flag.String("http", "127.0.0.1:8080", "HTTP stats API address (empty to disable)")
+	maxSessions := flag.Int("max-sessions", 500, "Maximum concurrent SSH sessions")
+	maxPerKey := flag.Int("max-per-key", 10, "Maximum sessions per SSH key")
+	connectRate := flag.Float64("connect-rate", 10, "Max new connections per second")
+	idleTimeout := flag.Duration("idle-timeout", 30*time.Minute, "Idle session timeout")
 	flag.Parse()
+
+	// Open player database
+	store, err := player.NewStore(*dbPath)
+	if err != nil {
+		log.Fatal("Failed to open database", "error", err)
+	}
+	defer store.Close()
+
+	// Connection limiter
+	limiter := server.NewConnLimiter(*maxSessions, *maxPerKey, *connectRate)
 
 	// Create simulation engine
 	engine := simulation.NewEngine()
@@ -48,7 +67,7 @@ func main() {
 		}),
 		wish.WithMiddleware(
 			bubbletea.MiddlewareWithProgramHandler(
-				makeHandler(engine, starfield),
+				makeHandler(engine, starfield, store, limiter, *idleTimeout),
 				termenv.ANSI256,
 			),
 			activeterm.Middleware(),
@@ -67,9 +86,26 @@ func main() {
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {
-			log.Fatal("Server error", "error", err)
+			// Don't log fatal on clean shutdown
+			select {
+			case <-done:
+			default:
+				log.Error("Server error", "error", err)
+			}
 		}
 	}()
+
+	// HTTP stats API
+	if *httpAddr != "" {
+		statsAPI := httpapi.NewStatsServer(engine)
+		httpSrv := &http.Server{Addr: *httpAddr, Handler: statsAPI.Handler()}
+		go func() {
+			log.Info("Starting HTTP stats API", "addr", *httpAddr)
+			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Error("HTTP server error", "error", err)
+			}
+		}()
+	}
 
 	<-done
 	log.Info("Shutting down...")
@@ -82,17 +118,46 @@ func main() {
 	}
 }
 
-func makeHandler(engine *simulation.Engine, starfield *render.Starfield) bubbletea.ProgramHandler {
+func makeHandler(engine *simulation.Engine, starfield *render.Starfield, store *player.Store, limiter *server.ConnLimiter, idleTimeout time.Duration) bubbletea.ProgramHandler {
 	return func(s ssh.Session) *tea.Program {
-		renderer := bubbletea.MakeRenderer(s)
 		sshKey := server.SessionKey(s)
 
-		model := server.NewModel(engine, starfield, renderer, sshKey)
+		// Check connection limits
+		if !limiter.TryConnect(sshKey) {
+			fmt.Fprintln(s, "Server is full or rate limited. Try again shortly.")
+			s.Close()
+			return nil
+		}
+
+		renderer := bubbletea.MakeRenderer(s)
+		sshUser := s.User()
+		sshCmd := s.Command()
+
+		model := server.NewModel(engine, starfield, renderer, sshKey, store, sshUser, sshCmd)
 
 		// Cleanup on session end
 		go func() {
 			<-s.Context().Done()
 			model.Cleanup()
+			limiter.Disconnect(sshKey)
+		}()
+
+		// Idle timeout monitor
+		go func() {
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-s.Context().Done():
+					return
+				case <-ticker.C:
+					if !model.IsViewOnly() && time.Since(model.LastActivity()) > idleTimeout {
+						log.Info("Idle timeout", "key", sshKey)
+						s.Close()
+						return
+					}
+				}
+			}
 		}()
 
 		opts := bubbletea.MakeOptions(s)

@@ -61,7 +61,21 @@ func (fb *FrameBuilder) Build(snap simulation.Snapshot) string {
 		}
 	}
 
-	// 2. Overlay ships
+	// 2. Overlay ship trails (dim fading dots behind ships)
+	trailColors := []string{"#555555", "#444444", "#333333"}
+	for _, s := range snap.Ships {
+		if s.State != simulation.Alive || s.TrailLen == 0 {
+			continue
+		}
+		for ti := 0; ti < s.TrailLen; ti++ {
+			tx, ty, vis := fb.Viewport.WorldToScreen(s.Trail[ti].X, s.Trail[ti].Y)
+			if vis && tx >= 0 && tx < w && ty >= 0 && ty < h {
+				cells[ty][tx] = Cell{Char: "·", FG: trailColors[ti], BG: cells[ty][tx].BG}
+			}
+		}
+	}
+
+	// 3. Overlay ships
 	for _, s := range snap.Ships {
 		if s.State == simulation.Dead {
 			continue
@@ -80,15 +94,29 @@ func (fb *FrameBuilder) Build(snap simulation.Snapshot) string {
 		sym := faction.Symbol(s.Faction, s.VX, s.VY)
 		fg := faction.Factions[s.Faction].ColorFG
 
+		// Jaffa Kree! boost: highlight with bright yellow
+		if s.Boosted {
+			fg = "#FFFF00"
+		}
+
 		for i, ch := range sym {
 			px := sx + i
 			if px >= 0 && px < w && sy >= 0 && sy < h {
-				cells[sy][px] = Cell{Char: string(ch), FG: fg, BG: cells[sy][px].BG, Bold: true}
+				bg := cells[sy][px].BG
+				// Kassa Rush: alternating purple/red background tint for Lucian ships
+				if s.Faction == faction.Lucian && snap.PowerStatuses[faction.Lucian].State == simulation.PowerActive {
+					if (sx+sy)%2 == 0 {
+						bg = "#3A0040"
+					} else {
+						bg = "#400010"
+					}
+				}
+				cells[sy][px] = Cell{Char: string(ch), FG: fg, BG: bg, Bold: true}
 			}
 		}
 	}
 
-	// 3. Overlay explosion effects
+	// 4. Overlay explosion effects
 	for _, ex := range snap.Explosions {
 		sx, sy, visible := fb.Viewport.WorldToScreen(ex.X, ex.Y)
 		if !visible {
@@ -97,7 +125,12 @@ func (fb *FrameBuilder) Build(snap simulation.Snapshot) string {
 		fb.renderExplosion(cells, sx, sy, ex.Frame, ex.Faction)
 	}
 
-	// 4. Serialize to string
+	// 5. Overlay beam effects (Asgard Ion Cannon, etc.)
+	for _, beam := range snap.Beams {
+		fb.renderBeam(cells, beam)
+	}
+
+	// 6. Serialize to string
 	return fb.serialize(cells)
 }
 
@@ -138,6 +171,50 @@ func (fb *FrameBuilder) renderExplosion(cells [][]Cell, sx, sy, frame, factionID
 			cells[py][px] = Cell{Char: p.ch, FG: color, Bold: frame < 2}
 		}
 	}
+}
+
+func (fb *FrameBuilder) renderBeam(cells [][]Cell, beam simulation.BeamEffect) {
+	w, h := fb.Viewport.Width, fb.Viewport.Height
+
+	// Map beam endpoints to screen coords
+	sx1, sy1, _ := fb.Viewport.WorldToScreen(beam.X1, beam.Y1)
+	sx2, sy2, _ := fb.Viewport.WorldToScreen(beam.X2, beam.Y2)
+
+	// Bresenham line to draw beam across screen
+	dx := sx2 - sx1
+	dy := sy2 - sy1
+	steps := abs(dx)
+	if abs(dy) > steps {
+		steps = abs(dy)
+	}
+	if steps == 0 {
+		return
+	}
+
+	beamColor := "#00FFFF" // cyan for Asgard
+	if beam.Faction >= 0 && beam.Faction < faction.Count {
+		beamColor = faction.Factions[beam.Faction].ColorFG
+	}
+
+	for i := 0; i <= steps; i++ {
+		t := float64(i) / float64(steps)
+		px := sx1 + int(t*float64(dx))
+		py := sy1 + int(t*float64(dy))
+		if px >= 0 && px < w && py >= 0 && py < h {
+			ch := "═"
+			if abs(dy) > abs(dx) {
+				ch = "║"
+			}
+			cells[py][px] = Cell{Char: ch, FG: beamColor, Bold: true}
+		}
+	}
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 func (fb *FrameBuilder) serialize(cells [][]Cell) string {
