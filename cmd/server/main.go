@@ -20,7 +20,6 @@ import (
 
 	"ssh-gatewars/internal/httpapi"
 	"ssh-gatewars/internal/player"
-	"ssh-gatewars/internal/render"
 	"ssh-gatewars/internal/server"
 	"ssh-gatewars/internal/simulation"
 )
@@ -35,39 +34,33 @@ func main() {
 	maxPerKey := flag.Int("max-per-key", 10, "Maximum sessions per SSH key")
 	connectRate := flag.Float64("connect-rate", 10, "Max new connections per second")
 	idleTimeout := flag.Duration("idle-timeout", 30*time.Minute, "Idle session timeout")
+	seed := flag.Int64("seed", 0, "Galaxy seed (0 = random)")
+	systemCount := flag.Int("systems", 50, "Number of star systems")
 	flag.Parse()
 
-	// Open player database
 	store, err := player.NewStore(*dbPath)
 	if err != nil {
 		log.Fatal("Failed to open database", "error", err)
 	}
 	defer store.Close()
 
-	// Connection limiter
 	limiter := server.NewConnLimiter(*maxSessions, *maxPerKey, *connectRate)
 
-	// Create simulation engine
-	engine := simulation.NewEngine()
+	engine := simulation.NewEngine(*seed, *systemCount)
 
-	// Create shared starfield
-	starfield := render.NewStarfield(simulation.WorldW, simulation.WorldH, 42)
-
-	// Start simulation in background
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go engine.Run(ctx)
 
-	// SSH server
 	srv, err := wish.NewServer(
 		wish.WithAddress(fmt.Sprintf("%s:%d", *host, *port)),
 		wish.WithHostKeyPath(*keyPath),
 		wish.WithPublicKeyAuth(func(_ ssh.Context, _ ssh.PublicKey) bool {
-			return true // accept all keys for identity
+			return true
 		}),
 		wish.WithMiddleware(
 			bubbletea.MiddlewareWithProgramHandler(
-				makeHandler(engine, starfield, store, limiter, *idleTimeout),
+				makeHandler(engine, store, limiter, *idleTimeout),
 				termenv.ANSI256,
 			),
 			activeterm.Middleware(),
@@ -77,16 +70,15 @@ func main() {
 		log.Fatal("Failed to create server", "error", err)
 	}
 
-	// Graceful shutdown
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 
-	log.Info("Starting SSH GateWars", "host", *host, "port", *port)
+	log.Info("Starting SSH GateWars — Galactic Conquest",
+		"host", *host, "port", *port, "systems", engine.GalaxySystemCount())
 	log.Info("Connect with:", "command", fmt.Sprintf("ssh -p %d localhost", *port))
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {
-			// Don't log fatal on clean shutdown
 			select {
 			case <-done:
 			default:
@@ -95,7 +87,6 @@ func main() {
 		}
 	}()
 
-	// HTTP stats API
 	if *httpAddr != "" {
 		statsAPI := httpapi.NewStatsServer(engine)
 		httpSrv := &http.Server{Addr: *httpAddr, Handler: statsAPI.Handler()}
@@ -118,11 +109,10 @@ func main() {
 	}
 }
 
-func makeHandler(engine *simulation.Engine, starfield *render.Starfield, store *player.Store, limiter *server.ConnLimiter, idleTimeout time.Duration) bubbletea.ProgramHandler {
+func makeHandler(engine *simulation.Engine, store *player.Store, limiter *server.ConnLimiter, idleTimeout time.Duration) bubbletea.ProgramHandler {
 	return func(s ssh.Session) *tea.Program {
 		sshKey := server.SessionKey(s)
 
-		// Check connection limits
 		if !limiter.TryConnect(sshKey) {
 			fmt.Fprintln(s, "Server is full or rate limited. Try again shortly.")
 			s.Close()
@@ -133,16 +123,14 @@ func makeHandler(engine *simulation.Engine, starfield *render.Starfield, store *
 		sshUser := s.User()
 		sshCmd := s.Command()
 
-		model := server.NewModel(engine, starfield, renderer, sshKey, store, sshUser, sshCmd)
+		model := server.NewModel(engine, renderer, sshKey, store, sshUser, sshCmd)
 
-		// Cleanup on session end
 		go func() {
 			<-s.Context().Done()
-			model.Cleanup()
+			engine.UnregisterPlayer(sshKey)
 			limiter.Disconnect(sshKey)
 		}()
 
-		// Idle timeout monitor
 		go func() {
 			ticker := time.NewTicker(60 * time.Second)
 			defer ticker.Stop()

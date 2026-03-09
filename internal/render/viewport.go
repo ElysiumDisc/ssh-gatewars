@@ -36,3 +36,16 @@ func (v *Viewport) ScreenToWorld(sx, sy int) (wx, wy int) {
 	wy = sy * v.WorldH / v.Height
 	return
 }
+
+// PixelHeight returns the doubled vertical resolution for half-block rendering.
+func (v *Viewport) PixelHeight() int {
+	return v.Height * 2
+}
+
+// WorldToPixel converts world-space coordinates to pixel-space coordinates.
+func (v *Viewport) WorldToPixel(wx, wy float64) (px, py int, visible bool) {
+	px = int(wx * float64(v.Width) / float64(v.WorldW))
+	py = int(wy * float64(v.Height*2) / float64(v.WorldH))
+	visible = px >= 0 && px < v.Width && py >= 0 && py < v.Height*2
+	return
+}

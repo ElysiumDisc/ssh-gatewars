@@ -26,16 +26,23 @@ func (s *StatsServer) Handler() http.Handler {
 }
 
 type factionStats struct {
-	Name      string  `json:"name"`
-	Players   int     `json:"players"`
-	Ships     int     `json:"ships"`
-	Territory float64 `json:"territory"`
-	Kills     int     `json:"kills"`
-	Deaths    int     `json:"deaths"`
+	Name       string  `json:"name"`
+	Players    int     `json:"players"`
+	Systems    int     `json:"systems"`
+	Population float64 `json:"population"`
+	Naquadah   float64 `json:"naquadah"`
+}
+
+type campaignStats struct {
+	State  string `json:"state"`
+	Winner string `json:"winner"`
 }
 
 type statsResponse struct {
 	Factions []factionStats `json:"factions"`
+	Systems  int            `json:"systems"`
+	Colonies int            `json:"colonies"`
+	Campaign campaignStats  `json:"campaign"`
 	Tick     uint64         `json:"tick"`
 }
 
@@ -44,23 +51,30 @@ func (s *StatsServer) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	resp := statsResponse{
 		Factions: make([]factionStats, faction.Count),
+		Systems:  len(snap.Systems),
+		Colonies: len(snap.Colonies),
 		Tick:     snap.Tick,
 	}
 
 	for i := 0; i < faction.Count; i++ {
-		territory := 20.0
-		if snap.Territory != nil {
-			territory = snap.Territory.Percents[i]
-		}
 		resp.Factions[i] = factionStats{
-			Name:      faction.Factions[i].Name,
-			Players:   snap.PlayerCounts[i],
-			Ships:     snap.ShipCounts[i],
-			Territory: territory,
-			Kills:     snap.KillCounts[i],
-			Deaths:    snap.DeathCounts[i],
+			Name:       faction.Factions[i].Name,
+			Players:    snap.PlayerCounts[i],
+			Systems:    snap.Factions[i].SystemCount,
+			Population: snap.Factions[i].Population,
+			Naquadah:   snap.Factions[i].Naquadah,
 		}
 	}
+
+	state := "active"
+	winner := ""
+	if snap.Campaign.State == simulation.CampaignWon {
+		state = "won"
+		if snap.Campaign.Winner >= 0 && snap.Campaign.Winner < faction.Count {
+			winner = faction.Factions[snap.Campaign.Winner].Name
+		}
+	}
+	resp.Campaign = campaignStats{State: state, Winner: winner}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")

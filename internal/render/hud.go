@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -14,77 +15,65 @@ const HUDRows = 3
 
 // BuildHUD creates the bottom status bar.
 func BuildHUD(factionID int, snap simulation.Snapshot, width int, renderer *lipgloss.Renderer) string {
-	f := faction.Factions[factionID]
-	fgColor := lipgloss.Color(f.ColorFG)
-
-	headerStyle := renderer.NewStyle().Foreground(fgColor).Bold(true)
 	dimStyle := renderer.NewStyle().Foreground(lipgloss.Color("#888888"))
-	barStyle := renderer.NewStyle().Foreground(fgColor)
+	naqStyle := renderer.NewStyle().Foreground(lipgloss.Color("#FFD700")).Bold(true)
 
-	ships := snap.ShipCounts[factionID]
-	players := snap.PlayerCounts[factionID]
-	territory := 20.0
-	if snap.Territory != nil {
-		territory = snap.Territory.Percents[factionID]
-	}
-	kills := snap.KillCounts[factionID]
-	deaths := snap.DeathCounts[factionID]
-
-	// Territory bar
-	barWidth := 20
-	filled := int(territory / 100 * float64(barWidth))
-	if filled > barWidth {
-		filled = barWidth
-	}
-	bar := barStyle.Render(strings.Repeat("█", filled)) +
-		dimStyle.Render(strings.Repeat("░", barWidth-filled))
-
-	// Line 1: Faction header
-	line1 := headerStyle.Render(fmt.Sprintf("── %s ── %d online ── %d ships ── ", f.ShortName, players, ships)) +
-		bar + dimStyle.Render(fmt.Sprintf(" %.0f%%", territory))
-
-	// Pad to width
-	if len(line1) < width {
-		line1 += dimStyle.Render(strings.Repeat("─", width-lipgloss.Width(line1)))
+	// Line 1: Campaign status
+	var line1 string
+	switch snap.Campaign.State {
+	case simulation.CampaignActive:
+		line1 = renderer.NewStyle().Foreground(lipgloss.Color("#40E0D0")).Bold(true).
+			Render("── GALACTIC CONQUEST ──")
+	case simulation.CampaignWon:
+		winner := "???"
+		if snap.Campaign.Winner >= 0 && snap.Campaign.Winner < faction.Count {
+			winner = faction.Factions[snap.Campaign.Winner].Name
+		}
+		line1 = renderer.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true).
+			Render(fmt.Sprintf("── VICTORY! %s conquers the galaxy! ──", winner))
 	}
 
-	// Line 2: Stats + power cooldown
-	ps := snap.PowerStatuses[factionID]
-	var powerStr string
-	switch ps.State {
-	case simulation.PowerReady:
-		powerStr = renderer.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true).Render("READY [SPACE]")
-	case simulation.PowerActive:
-		remaining := int(ps.Remaining.Seconds())
-		barW := 10
-		frac := 0.0
-		if ps.Total > 0 {
-			frac = float64(ps.Remaining) / float64(ps.Total)
-		}
-		filled := int(frac * float64(barW))
-		if filled > barW {
-			filled = barW
-		}
-		powerBar := headerStyle.Render(strings.Repeat("█", filled)) + dimStyle.Render(strings.Repeat("░", barW-filled))
-		powerStr = headerStyle.Render(fmt.Sprintf("ACTIVE %ds ", remaining)) + powerBar
-	case simulation.PowerCooldown:
-		remaining := int(ps.Remaining.Seconds())
-		barW := 10
-		frac := 0.0
-		if ps.Total > 0 {
-			frac = 1.0 - float64(ps.Remaining)/float64(ps.Total)
-		}
-		filled := int(frac * float64(barW))
-		if filled > barW {
-			filled = barW
-		}
-		powerBar := dimStyle.Render(strings.Repeat("░", barW-filled)) + barStyle.Render(strings.Repeat("█", filled))
-		powerStr = dimStyle.Render(fmt.Sprintf("CD %ds ", remaining)) + powerBar
+	if snap.Paused {
+		line1 += dimStyle.Render(" [STANDBY]")
 	}
-	line2 := dimStyle.Render(fmt.Sprintf("  Kills: %d  |  Deaths: %d  |  %s: ", kills, deaths, ps.Name)) + powerStr
+
+	padW := width - lipgloss.Width(line1)
+	if padW > 0 {
+		line1 += dimStyle.Render(strings.Repeat("─", padW))
+	}
+
+	// Line 2: Faction + resources
+	factionName := "???"
+	naq := 0.0
+	if factionID >= 0 && factionID < faction.Count {
+		factionName = faction.Factions[factionID].ShortName
+		naq = snap.Factions[factionID].Naquadah
+	}
+
+	fStyle := renderer.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+	if factionID >= 0 && factionID < faction.Count {
+		fStyle = renderer.NewStyle().Foreground(lipgloss.Color(faction.Factions[factionID].ColorFG)).Bold(true)
+	}
+
+	players := 0
+	for _, c := range snap.PlayerCounts {
+		players += c
+	}
+
+	campaignAge := time.Since(snap.Campaign.StartedAt).Round(time.Minute)
+	ageStr := fmt.Sprintf("%dh%dm", int(campaignAge.Hours()), int(campaignAge.Minutes())%60)
+
+	systems := 0
+	if factionID >= 0 && factionID < faction.Count {
+		systems = snap.Factions[factionID].SystemCount
+	}
+
+	line2 := fStyle.Render("  "+factionName) + "  " +
+		naqStyle.Render(fmt.Sprintf("Naq:%.0f", naq)) + "  " +
+		dimStyle.Render(fmt.Sprintf("Systems:%d  Online:%d  Age:%s", systems, players, ageStr))
 
 	// Line 3: Controls
-	line3 := dimStyle.Render("  [1-5] Focus sector  |  [Tab] Views  |  [?] Help  |  [q] Quit")
+	line3 := dimStyle.Render("  [Arrows]Navigate  [Enter]System  [t]Tech  [d]Diplo  [Tab]Score  [?]Help  [q]Quit")
 
 	return line1 + "\n" + line2 + "\n" + line3
 }

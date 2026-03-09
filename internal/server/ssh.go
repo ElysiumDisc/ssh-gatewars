@@ -7,14 +7,12 @@ import (
 
 	"github.com/charmbracelet/ssh"
 
-	"ssh-gatewars/internal/render"
 	"ssh-gatewars/internal/simulation"
 )
 
 // Server holds shared resources for all SSH sessions.
 type Server struct {
-	Engine    *simulation.Engine
-	Starfield *render.Starfield
+	Engine *simulation.Engine
 }
 
 // SessionKey extracts a stable identifier from the SSH session.

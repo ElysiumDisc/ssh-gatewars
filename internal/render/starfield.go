@@ -40,3 +40,18 @@ func (sf *Starfield) Get(x, y int) byte {
 	}
 	return sf.cells[y*sf.Width+x]
 }
+
+// GetColor returns the hex color for the star at world coordinates.
+// Returns "" for empty space (no star).
+func (sf *Starfield) GetColor(x, y int) string {
+	switch sf.Get(x, y) {
+	case '.':
+		return "#555555"
+	case '*':
+		return "#AAAAAA"
+	case '+':
+		return "#FFFFFF"
+	default:
+		return ""
+	}
+}
