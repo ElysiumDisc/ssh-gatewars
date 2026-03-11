@@ -15,6 +15,7 @@ const (
 	ViewDead                        // death screen
 	ViewPlayerList                  // online player list modal
 	ViewAimMode                     // targeting reticle for ranged fire
+	ViewStarMap                     // astroterm-inspired gate network browser
 )
 
 // FocusTarget determines where keyboard input goes.

@@ -86,6 +86,9 @@ type Model struct {
 
 	// Aim mode
 	aimTarget core.Pos // reticle position
+
+	// Star map
+	starMap *views.StarMapState
 }
 
 // NewModel creates a new TUI model for a session.
@@ -244,6 +247,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateExplore(msg)
 	case ViewAimMode:
 		return m.updateAimMode(msg)
+	case ViewStarMap:
+		return m.updateStarMap(msg)
 	case ViewDHD:
 		return m.updateDHD(msg)
 	case ViewInventory:
@@ -353,6 +358,11 @@ func (m *Model) updateExplore(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.toggleChat()
 	case KeyPlayerList:
 		m.playerListOpen = !m.playerListOpen
+	case KeyStarMap:
+		if m.char != nil {
+			m.starMap = views.NewStarMapState(m.char.DiscoveredAddresses, m.char.Location)
+			m.state = ViewStarMap
+		}
 	case KeyHelp:
 		m.state = ViewHelp
 	case KeyCancel:
@@ -526,6 +536,10 @@ func (m *Model) View() string {
 		return m.viewExplore()
 	case ViewAimMode:
 		return m.viewAimMode()
+	case ViewStarMap:
+		if m.starMap != nil {
+			return views.RenderStarMap(m.starMap, m.width, m.height)
+		}
 	case ViewDHD:
 		return views.RenderDHD(m.dhdSymbols, m.dhdCursor, m.width, m.height)
 	case ViewInventory:
@@ -762,6 +776,74 @@ func (m *Model) updateAimMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.aimTarget.X--
 	case "right", "l", "d":
 		m.aimTarget.X++
+	}
+	return m, nil
+}
+
+// --- Star map ---
+
+func (m *Model) updateStarMap(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.starMap == nil {
+		m.state = m.previousExploreState()
+		return m, nil
+	}
+
+	panSpeed := 3.0
+	switch msg.String() {
+	case "esc", "m":
+		m.state = m.previousExploreState()
+	case "up", "k", "w":
+		m.starMap.CamY -= panSpeed
+	case "down", "j", "s":
+		m.starMap.CamY += panSpeed
+	case "left", "h", "a":
+		m.starMap.CamX -= panSpeed
+	case "right", "l", "d":
+		m.starMap.CamX += panSpeed
+	case "+", "=":
+		if m.starMap.Zoom < 4 {
+			m.starMap.Zoom++
+		}
+	case "-", "_":
+		if m.starMap.Zoom > 0 {
+			m.starMap.Zoom--
+		}
+	case "tab":
+		// Cycle to next star
+		if len(m.starMap.Stars) > 0 {
+			m.starMap.Cursor = (m.starMap.Cursor + 1) % len(m.starMap.Stars)
+			star := m.starMap.Stars[m.starMap.Cursor]
+			m.starMap.CamX = star.WorldX
+			m.starMap.CamY = star.WorldY
+		}
+	case "shift+tab":
+		// Cycle to previous star
+		if len(m.starMap.Stars) > 0 {
+			m.starMap.Cursor--
+			if m.starMap.Cursor < 0 {
+				m.starMap.Cursor = len(m.starMap.Stars) - 1
+			}
+			star := m.starMap.Stars[m.starMap.Cursor]
+			m.starMap.CamX = star.WorldX
+			m.starMap.CamY = star.WorldY
+		}
+	case "enter":
+		// Dial selected star's address
+		if m.starMap.Cursor >= 0 && m.starMap.Cursor < len(m.starMap.Stars) {
+			addr := m.starMap.Stars[m.starMap.Cursor].Address
+			if addr == gamedata.EarthAddress && m.char.Location == "sgc" {
+				m.flash = "You're already at SGC."
+				m.flashTime = time.Now()
+			} else {
+				m.engine.EnqueueAction(simulation.PlayerAction{
+					Type:      simulation.ActionDialGate,
+					PlayerKey: m.session.SSHKey,
+					Address:   addr,
+				})
+				m.state = ViewPlanet
+				m.fogPlanet = ""
+			}
+		}
 	}
 	return m, nil
 }

@@ -18,6 +18,7 @@ Explore planets through a Stargate network, fight Jaffa with ranged and melee co
 - **Cover system** — Hide behind walls, crates, and consoles to reduce incoming fire. Cover values per tile type.
 - **25+ weapons** — Earth (P-90, M9, shotgun, C-4), Goa'uld (staff weapon, zat, kara kesh), Ancient (drones, hand weapon, ARG), Asgard (plasma beam), Ori (staff, stun).
 - **20+ enemy types** — Jaffa patrols, Serpent Guards, Kull Warriors, Replicator swarms, Ori soldiers, Unas, crystal entities, Sodan warriors.
+- **Star map** — `m` to browse the entire gate network. Astroterm-inspired star field with constellation lines connecting named planets. Stars colored by biome, sized by threat. Pan, zoom, and dial directly from the map.
 - **DHD interface** — Circular dial-home device with 39 glyphs in concentric rings. Locked chevrons light up as you dial.
 - **Chat system** — devzat-inspired. Global #ops channel, planet-scoped #local, SG team channels, DMs. Walter NPC announces gate events. Slash commands (/help, /tune, /roster, /team, /me, /kree).
 - **SG teams** — Create named teams, invite players, team chat channel, coordinated exploration.
@@ -61,6 +62,7 @@ ssh -p 2222 localhost
 | `e` | Interact (loot, NPCs, consoles) |
 | `g` | Dial stargate (when adjacent) |
 | `i` | Inventory |
+| `m` | Star map (gate network browser) |
 | `A` | Address book |
 | `c` | Chat (cycle: hidden/compact/expanded) |
 | `Tab` | Player list |

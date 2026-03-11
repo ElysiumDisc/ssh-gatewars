@@ -2,6 +2,22 @@
 
 All notable changes to SSH GateWars are documented here.
 
+## v2.3.0 — Star Map (2026-03-11)
+
+### Added
+- **Star map** — `m` to open astroterm-inspired gate network browser
+- **Starfield rendering** — procedural background stars with depth layers
+- **Constellation lines** — named planets connected by dotted lines forming a Stargate constellation
+- **Star glyphs by threat** — ∗ (low), ✦ (medium), ★ (high), ✹ (extreme), ◉ (named)
+- **Biome-colored stars** — each star colored by its planet's biome type
+- **Pan & zoom** — WASD/arrows to pan, +/- to zoom, Tab/Shift+Tab to cycle stars
+- **Star info panel** — planet name, biome, gate address (symbols + code), threat bar
+- **Quick dial from map** — Enter on selected star to dial directly
+- **Current location indicator** — your planet highlighted in green
+- **Named planet positions** — Earth, Abydos, Chulak, Tollana, Cimmeria, Dakara, Langara, Atlantis at fixed iconic positions
+
+---
+
 ## v2.2.0 — Phase 3: Combat Overhaul (2026-03-11)
 
 ### Added

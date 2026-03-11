@@ -110,6 +110,7 @@ internal/
       hud.go                HUD bar (HP, weapon, ammo, location, threat level)
       inventory.go          Inventory/equipment modal
       chatpanel.go          Chat panel overlay (hidden/compact/expanded), toast notifications
+      starmap.go            Astroterm-inspired gate network browser with constellation lines
 ```
 
 ## Architecture Overview
@@ -167,6 +168,16 @@ Devzat-inspired chat with Hub goroutine for message routing:
 - **SG teams:** Create, invite, leave, kick, disband — each team gets a chat channel
 - **Slash commands:** /help, /tune, /roster, /who, /callsign, /me, /dm, /mute, /unmute, /motd, /clear, /team, /iris, /indeed, /kree, /shol'va
 - **TUI integration:** Chat panel overlay with 3 states (hidden/compact/expanded), focus management (game/chat), toast notifications
+
+### Star Map
+
+Astroterm-inspired gate network browser (`m` key):
+- **Positioning:** Each gate address seed deterministically generates (x, y) coordinates in world space. Named planets (Earth, Abydos, etc.) have fixed iconic positions forming a constellation pattern.
+- **Background:** Procedural star field (dim `.` and `·` dots) seeded from a fixed seed for consistency.
+- **Constellation lines:** Named planets connected by dotted lines (Earth↔Abydos, Earth↔Chulak, etc.).
+- **Star rendering:** Glyph varies by threat level (∗ → ✦ → ★ → ✹ → ✵), colored by biome theme. Named planets use ◉.
+- **Navigation:** Arrow keys pan, +/- zoom, Tab/Shift+Tab cycle through stars, Enter dials selected address.
+- **Info panel:** Shows selected star's name, biome, address (glyph + numeric), and threat bar.
 
 ### Adding a New Feature
 

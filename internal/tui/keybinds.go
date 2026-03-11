@@ -27,6 +27,7 @@ const (
 	KeyDrop        // 'd'
 	KeyFire        // 'f' — enter aim mode / fire
 	KeyReload      // 'r' — reload weapon
+	KeyStarMap     // 'm' — open star map
 )
 
 // MapKey translates a bubbletea key message to a KeyAction.
@@ -70,6 +71,8 @@ func MapKey(msg tea.KeyMsg) KeyAction {
 		return KeyFire
 	case "r":
 		return KeyReload
+	case "m":
+		return KeyStarMap
 	default:
 		return KeyNone
 	}
