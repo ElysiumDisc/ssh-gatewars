@@ -1,219 +1,124 @@
 # SSH GateWars
 
-> A 4X strategy game inspired by Master of Orion (1993), themed as Stargate SG-1.
-> Played entirely over SSH. No downloads. No accounts. Just `ssh sgc.games`
+A persistent multiplayer roguelike set in the Stargate SG-1 universe — playable entirely over SSH.
 
 ```
-$ ssh sgc.games
-
-        .-'''''-.
-      .'           '.
-     /    .-'''-.    \
-    |   /         \   |
-    |  |  GATEWARS |  |
-    |   \         /   |
-     \    '-...-'    /
-      '.           .'
-        '-......-'
-
-  SSH GATEWARS — MASTER OF ORION
-  A Stargate SG-1 4X Strategy Game
-```
-
-## What Is This?
-
-SSH GateWars is a **multiplayer 4X strategy game** rendered over SSH. Players join one of 5 Stargate SG-1 factions and cooperatively manage their faction's galactic empire — colonizing planets, building factories, researching technology, designing ships, and conquering rivals through a procedurally generated galaxy connected by Stargates.
-
-**It is not a game you play alone. Every online player strengthens their faction.**
-
-- **Explore** a procedurally generated galaxy of 50+ star systems connected by Stargates
-- **Colonize** planets with varying size, type, and mineral richness
-- **Build** factories, missile bases, and manage 5 production sliders per colony
-- **Research** across 6 tech trees to unlock new capabilities
-- **Conquer** rival factions through fleet combat and diplomacy
-
-### Multiplayer Model
-
-Each player joins one faction. Every online player adds to faction output (production, research). Any faction member can manage any colony, design ships, command fleets. This is cooperative empire management — more players online means more production.
-
-## The Five Factions
-
-| # | Faction | Color | Strength | Weakness | Special |
-|---|---------|-------|----------|----------|---------|
-| 1 | **Tau'ri** | Steel blue | Diplomacy +30%, Research +10% | Average combat | Cheaper treaties |
-| 2 | **Goa'uld** | Red | Production +20%, Attack +20% | Research -15% | Higher factory cap |
-| 3 | **Asgard** | Cyan teal | Research +50% | Ground -30%, slow growth | Cheaper miniaturization |
-| 4 | **Tok'ra** | Purple | Espionage +50% | Production -20% | Sabotage & intel |
-| 5 | **Jaffa Free Nation** | Yellow | Ground +50%, Defense +10% | Research -20% | Cheaper invasions |
-
-## The Galaxy
-
-Each campaign generates a procedural galaxy:
-
-- **50 star systems** (configurable) with Stargate connections
-- **5 homeworlds**: Earth, Chulak, Othala, Vorash, Cal Mah — one per faction, Terran/Medium/Normal
-- **Dakara**: center of the galaxy, Ancient superweapon, Huge/Ultra-Rich
-- **~30 named planets** from SG-1 canon: Abydos, Langara, Tollana, Heliopolis, Edora, Argos...
-- **Gate network**: each system connects to ~3 nearest neighbors via Stargates
-
-### Planets
-
-| Attribute | Values |
-|-----------|--------|
-| **Type** (13) | Terran, Ocean, Jungle, Arid, Steppe, Tundra, Desert (habitable) + Barren, Volcanic, Toxic, Inferno, Dead, Radiated (hostile — requires tech) |
-| **Size** (5) | Tiny (pop 2), Small (4), Medium (7), Large (10), Huge (14) |
-| **Minerals** (5) | Ultra-Poor (0.33x), Poor (0.5x), Normal (1x), Rich (1.33x), Ultra-Rich (1.67x) |
-
-### Stargate Theming
-
-| MOO Concept | Stargate Theme |
-|-------------|----------------|
-| Star systems | Star systems connected by Stargates |
-| Hyperspace lanes | Stargate network (instant) + Hyperspace (slow, any-to-any) |
-| 10 Races | 5 Factions: Tau'ri, Goa'uld, Asgard, Tok'ra, Jaffa |
-| BC (money) | Naquadah |
-| 4 hull sizes | Al'kesh, Ha'tak, O'Neill-class, City-ship |
-| 6 tech trees | SGC Systems, Goa'uld Engineering, Asgard Shields, Ancient Knowledge, Hyperdrive Tech, Weapons |
-| Galactic Council | Galactic Council (same) |
-| Orion + Guardian | Dakara (Ancient superweapon) + Guardian fleet |
-
-## Colony Management
-
-Each colony has **5 production sliders** (sum to 100%):
-
-| Slider | Effect |
-|--------|--------|
-| **Ship** | Builds ships from the build queue |
-| **Defense** | Builds missile bases (50 production each) |
-| **Industry** | Builds factories (10 production each) — more factories = more total output |
-| **Ecology** | Cleans waste, then terraforms (increases max population) |
-| **Research** | Feeds the faction research pool across 6 tech trees |
-
-### Production Formula
-
-```
-baseOutput = min(population, factories) * mineralMultiplier * factionBonus
-onlineBonus = 1.0 + min(onlinePlayers * 5%, cap 50%)
-totalOutput = baseOutput * onlineBonus
-```
-
-Population grows logistically — fast when low, slowing near the planet's max capacity.
-
-## Controls
-
-### Galaxy Map (Hub)
-
-| Key | Action |
-|-----|--------|
-| Arrow keys / `hjkl` | Navigate between star systems |
-| `Enter` | Open system view |
-| `t` | Tech tree / research allocation |
-| `d` | Diplomacy view |
-| `s` | Ship designer |
-| `Tab` | Scoreboard |
-| `?` | Help |
-| `q` | Disconnect |
-
-### System View
-
-| Key | Action |
-|-----|--------|
-| Arrow keys / `hjkl` | Navigate to adjacent systems |
-| `Enter` | Manage colony (if owned) |
-| `Esc` | Back to galaxy map |
-
-### Colony Management
-
-| Key | Action |
-|-----|--------|
-| `Up` / `Down` | Select production slider |
-| `Left` / `Right` | Adjust slider (-5% / +5%) |
-| `Esc` | Back to system view |
-
-### Tech Tree
-
-| Key | Action |
-|-----|--------|
-| `Up` / `Down` | Select tech tree |
-| `Left` / `Right` | Adjust research allocation |
-| `Esc` | Back to galaxy map |
-
-## Running the Server
-
-```bash
-# Build
-go build -o gatewars ./cmd/server/
-
-# Run (generates SSH host key on first start)
-./gatewars --port 2222
-
-# Connect
 ssh -p 2222 localhost
 ```
 
-### Quick Faction Login
+Explore planets through a Stargate network, fight Jaffa with ranged and melee combat, discover Ancient technology, chat with other players, and bring loot back to SGC — all in your terminal.
 
-```
-ssh tauri@sgc.games     # Jump straight into Tau'ri
-ssh asgard@sgc.games    # Join the Asgard
-ssh tokra@sgc.games     # Join the Tok'ra
+## Features
+
+- **SSH multiplayer** — No client install. Connect with any terminal emulator.
+- **Stargate network** — Dial 7-symbol gate addresses to travel between worlds. Discover new addresses through exploration and intel.
+- **Procedural planets** — Each gate address generates a unique world with biome, threat level, enemies, and loot. Persistent named planets (SGC, Abydos, Chulak) coexist with infinite procedural ones.
+- **Real-time world** — 10 Hz simulation. Enemies patrol and hunt independently. The world is alive whether you're moving or not.
+- **Ranged & melee combat** — `f` to aim and fire ranged weapons (P-90, staff weapons, zat). Bump into enemies for melee. Line of sight, cover system, and projectile physics.
+- **Cover system** — Hide behind walls, crates, and consoles to reduce incoming fire. Cover values per tile type.
+- **25+ weapons** — Earth (P-90, M9, shotgun, C-4), Goa'uld (staff weapon, zat, kara kesh), Ancient (drones, hand weapon, ARG), Asgard (plasma beam), Ori (staff, stun).
+- **20+ enemy types** — Jaffa patrols, Serpent Guards, Kull Warriors, Replicator swarms, Ori soldiers, Unas, crystal entities, Sodan warriors.
+- **DHD interface** — Circular dial-home device with 39 glyphs in concentric rings. Locked chevrons light up as you dial.
+- **Chat system** — devzat-inspired. Global #ops channel, planet-scoped #local, SG team channels, DMs. Walter NPC announces gate events. Slash commands (/help, /tune, /roster, /team, /me, /kree).
+- **SG teams** — Create named teams, invite players, team chat channel, coordinated exploration.
+- **SGC home base** — Gate room, armory, briefing room, infirmary, mess hall. Gear up between missions.
+- **Player persistence** — Character stats, inventory, and discovered addresses saved to SQLite.
+- **Connection security** — Token-bucket rate limiting, per-key session caps, graceful degradation under load.
+
+## Quick Start
+
+**Requirements:** Go 1.22+
+
+```bash
+make build
+./gatewars
+
+# Or build and run in one step
+make run
 ```
 
-### Multiplex Views
-
-```
-ssh sgc.games              # Galaxy map (default)
-ssh sgc.games galaxy       # Galaxy map directly
-ssh sgc.games scoreboard   # Faction scoreboard
+**Connect:**
+```bash
+ssh -p 2222 localhost
 ```
 
-### Flags
+### Server Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | `2222` | SSH server port |
-| `--host` | `0.0.0.0` | Bind address |
-| `--key` | `.ssh/id_ed25519` | Host key path |
+| `--port` | `2222` | SSH listen port |
+| `--seed` | `0` | World seed (0 = random) |
 | `--db` | `gatewars.db` | SQLite database path |
-| `--http` | `127.0.0.1:8080` | HTTP stats API address (empty to disable) |
-| `--seed` | `0` | Galaxy seed (0 = random) |
-| `--systems` | `50` | Number of star systems (20-100) |
-| `--max-sessions` | `500` | Maximum concurrent SSH sessions |
-| `--max-per-key` | `10` | Maximum sessions per SSH key |
-| `--connect-rate` | `10` | Max new connections per second |
-| `--idle-timeout` | `30m` | Idle session timeout |
+| `--max-sessions` | `200` | Maximum concurrent connections |
+
+## Controls
+
+| Key | Action |
+|-----|--------|
+| `WASD` / `HJKL` / Arrows | Move (bump into enemies for melee) |
+| `f` | Aim mode (ranged fire) |
+| `r` | Reload weapon |
+| `e` | Interact (loot, NPCs, consoles) |
+| `g` | Dial stargate (when adjacent) |
+| `i` | Inventory |
+| `A` | Address book |
+| `c` | Chat (cycle: hidden/compact/expanded) |
+| `Tab` | Player list |
+| `?` | Help |
+| `q` / `Esc` | Quit / back |
+
+### Chat Commands
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show command list |
+| `/tune #channel` | Switch active channel |
+| `/roster` | List online players |
+| `/who` | Players on current channel |
+| `/callsign <name>` | Change display name |
+| `/me <action>` | Emote |
+| `@name message` | Direct message |
+| `/team create <n>` | Create SG team |
+| `/team invite <n>` | Invite to team |
+| `/kree` | KREE! |
+| `/indeed` | Indeed. |
+
+## Architecture
+
+```
+cmd/server/         Entry point, flag parsing, server bootstrap
+internal/
+  core/             Configuration, geometry types, session metadata
+  simulation/       Game engine (10Hz tick loop, planet instances, enemy AI, projectiles)
+  gamedata/         Tiles, biomes, items, enemies, gate addresses, factions
+  world/            Tile maps, procedural generation, SGC layout, stargate, LOS
+  entity/           Characters, enemies, inventory
+  combat/           Melee damage, ranged attacks, projectiles, cover system, LOS
+  chat/             Message hub, channels, Walter NPC, slash commands, teams
+  server/           SSH server, identity, rate limiter
+  store/            SQLite persistence (characters, inventory, addresses, chat, teams)
+  tui/              Bubbletea TUI model, views, keybinds
+```
+
+**Concurrency model:** Single-writer engine goroutine ticks all active planet instances at 10Hz. Each planet publishes atomic immutable snapshots. Reader sessions access snapshots lock-free. Chat hub runs as a separate goroutine with channel-based message routing.
 
 ## Tech Stack
 
-- **Go 1.26** — goroutines for concurrent players, single binary
-- **[Wish](https://github.com/charmbracelet/wish)** — SSH app framework
-- **[Bubbletea](https://github.com/charmbracelet/bubbletea)** — TUI with Elm architecture
-- **[Lipgloss](https://github.com/charmbracelet/lipgloss)** — terminal styling
-- **SQLite** (modernc.org/sqlite) — player persistence, no CGO
+- [Go](https://go.dev/) 1.22+
+- [Wish](https://github.com/charmbracelet/wish) — SSH server
+- [Bubbletea](https://github.com/charmbracelet/bubbletea) — TUI framework
+- [Lipgloss](https://github.com/charmbracelet/lipgloss) — Terminal styling
+- [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) — Pure-Go SQLite (no CGO)
 
-## Implementation Layers
+## Roadmap
 
-The game is being built incrementally:
-
-| Layer | Status | Content |
-|-------|--------|---------|
-| **1. Galaxy + Colonies + Economy** | Done | Procedural galaxy, colony sliders, population growth, factory building, research |
-| **2. Ship Design + Fleets** | Planned | Hull/component system, fleet movement (gate instant / hyperspace slow) |
-| **3. Combat** | Planned | Stack-based tactical combat, bombardment, ground invasion |
-| **4. Technology** | Planned | 50+ techs, miniaturization, component gating |
-| **5. Diplomacy + Victory** | Planned | Treaties, Galactic Council, victory conditions |
-| **6. Polish + Specials** | Planned | Dakara guardian, Tok'ra espionage, starbases |
-
-## In-Universe Lore
-
-> Replicator-Colonel-Carter coded this game. It's embedded in SGC terminals
-> as part of the Stargwent universe. Players "discover" it while browsing
-> classified systems.
-
-## Part of the Stargwent Universe
-
-SSH GateWars is a companion to [Stargwent](https://github.com/mrgamer/stargwent), a Stargate-themed card game. Same factions, same lore, same universe.
+- [x] Phase 1 — SGC hub, gate dialing, procedural planets, bump combat, loot, persistence
+- [x] Phase 2 — Chat system, SG teams, Walter NPC, multiplayer visibility
+- [x] Phase 3 — Ranged combat, aim mode, cover system, projectiles, 25+ weapons, 20+ enemies
+- [ ] Phase 4 — Tech tree, faction reputation, crafting, SGC lab
+- [ ] Phase 5 — Named planets (Abydos, Chulak, Dakara...), missions, server-wide events
+- [ ] Phase 6 — Specializations, perks, ascension, ASCII art polish
 
 ## License
 
-CC BY-NC 4.0
+Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)

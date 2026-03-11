@@ -1,10 +1,13 @@
-.PHONY: build run clean
+.PHONY: build run clean vet
 
 build:
-	go build -o gatewars ./cmd/server/
+	go build -o gatewars ./cmd/server
 
 run: build
-	./gatewars --port 2222
+	./gatewars
 
 clean:
-	rm -f gatewars server
+	rm -f gatewars
+
+vet:
+	go vet ./...

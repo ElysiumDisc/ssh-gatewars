@@ -5,87 +5,85 @@ import (
 	"time"
 )
 
-// ConnLimiter enforces connection limits and rate limiting.
+// ConnLimiter enforces connection rate limits and per-key session caps.
 type ConnLimiter struct {
-	mu              sync.Mutex
-	maxSessions     int
-	maxPerKey       int
-	activeSessions  int
-	sessionsPerKey  map[string]int
+	maxSessions int
+	maxPerKey   int
+	rateLimit   float64 // max new connections per second
 
-	// Token bucket for connection rate limiting
-	tokens     float64
-	maxTokens  float64
-	refillRate float64 // tokens per second
-	lastRefill time.Time
+	mu           sync.Mutex
+	sessions     map[string]int // sshKey → active session count
+	totalActive  int
+	lastConnect  time.Time
+	tokenBucket  float64
 }
 
-// NewConnLimiter creates a connection limiter.
-func NewConnLimiter(maxSessions, maxPerKey int, connectionsPerSec float64) *ConnLimiter {
+// NewConnLimiter creates a new connection limiter.
+func NewConnLimiter(maxSessions, maxPerKey int, rateLimit float64) *ConnLimiter {
 	return &ConnLimiter{
-		maxSessions:    maxSessions,
-		maxPerKey:      maxPerKey,
-		sessionsPerKey: make(map[string]int),
-		tokens:         connectionsPerSec,
-		maxTokens:      connectionsPerSec,
-		refillRate:     connectionsPerSec,
-		lastRefill:     time.Now(),
+		maxSessions: maxSessions,
+		maxPerKey:   maxPerKey,
+		rateLimit:   rateLimit,
+		sessions:    make(map[string]int),
+		lastConnect: time.Now(),
+		tokenBucket: rateLimit,
 	}
 }
 
-// TryConnect attempts to establish a new connection. Returns true if allowed.
-func (cl *ConnLimiter) TryConnect(sshKey string) bool {
-	cl.mu.Lock()
-	defer cl.mu.Unlock()
+// TryConnect attempts to register a new session. Returns true if allowed.
+func (l *ConnLimiter) TryConnect(sshKey string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
-	// Refill tokens
+	// Refill token bucket.
 	now := time.Now()
-	elapsed := now.Sub(cl.lastRefill).Seconds()
-	cl.tokens += elapsed * cl.refillRate
-	if cl.tokens > cl.maxTokens {
-		cl.tokens = cl.maxTokens
+	elapsed := now.Sub(l.lastConnect).Seconds()
+	l.lastConnect = now
+	l.tokenBucket += elapsed * l.rateLimit
+	if l.tokenBucket > l.rateLimit*2 {
+		l.tokenBucket = l.rateLimit * 2
 	}
-	cl.lastRefill = now
 
-	// Check rate limit
-	if cl.tokens < 1 {
+	// Check rate limit.
+	if l.tokenBucket < 1.0 {
 		return false
 	}
 
-	// Check total session cap
-	if cl.activeSessions >= cl.maxSessions {
+	// Check total session cap.
+	if l.totalActive >= l.maxSessions {
 		return false
 	}
 
-	// Check per-key cap
-	if cl.sessionsPerKey[sshKey] >= cl.maxPerKey {
+	// Check per-key cap.
+	if l.sessions[sshKey] >= l.maxPerKey {
 		return false
 	}
 
-	cl.tokens--
-	cl.activeSessions++
-	cl.sessionsPerKey[sshKey]++
+	l.tokenBucket -= 1.0
+	l.sessions[sshKey]++
+	l.totalActive++
 	return true
 }
 
-// Disconnect releases a connection slot.
-func (cl *ConnLimiter) Disconnect(sshKey string) {
-	cl.mu.Lock()
-	defer cl.mu.Unlock()
+// Disconnect removes a session from tracking.
+func (l *ConnLimiter) Disconnect(sshKey string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
-	cl.activeSessions--
-	if cl.activeSessions < 0 {
-		cl.activeSessions = 0
+	if l.sessions[sshKey] > 0 {
+		l.sessions[sshKey]--
+		if l.sessions[sshKey] == 0 {
+			delete(l.sessions, sshKey)
+		}
 	}
-	cl.sessionsPerKey[sshKey]--
-	if cl.sessionsPerKey[sshKey] <= 0 {
-		delete(cl.sessionsPerKey, sshKey)
+	if l.totalActive > 0 {
+		l.totalActive--
 	}
 }
 
-// ActiveSessions returns the current session count.
-func (cl *ConnLimiter) ActiveSessions() int {
-	cl.mu.Lock()
-	defer cl.mu.Unlock()
-	return cl.activeSessions
+// ActiveCount returns the total number of active sessions.
+func (l *ConnLimiter) ActiveCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.totalActive
 }

@@ -1,106 +1,73 @@
 package simulation
 
 import (
-	"time"
-
-	"ssh-gatewars/internal/faction"
+	"ssh-gatewars/internal/core"
 	"ssh-gatewars/internal/gamedata"
 )
 
-// Notification is a broadcast message.
-type Notification struct {
-	Message   string
-	CreatedAt time.Time
-	ExpiresAt time.Time
+// PlanetSnapshot is an immutable view of a planet instance for rendering.
+type PlanetSnapshot struct {
+	Tick        uint64
+	Address     gamedata.GateAddress
+	AddressCode string
+	PlanetName  string
+	Biome       string
+	Threat      int
+	MapWidth    int
+	MapHeight   int
+	Tiles       []gamedata.TileType // copy of tile data
+	GatePos     core.Pos
+	Enemies     []EnemySnapshot
+	Items       []ItemSnapshot
+	Players     []PlayerSnapshot
+	Projectiles []ProjectileSnapshot
 }
 
-// Snapshot is a read-only copy of the simulation state.
-type Snapshot struct {
-	Systems       []SystemSnapshot
-	Gates         [][2]int
-	Colonies      map[int]ColonySnapshot
-	Fleets        []FleetSnapshot
-	Factions      [faction.Count]FactionSnapshot
-	Campaign      CampaignSnapshot
-	Diplomacy     DiplomacySnapshot
-	Notifications []Notification
-	PlayerCounts  [faction.Count]int
-	Tick          uint64
-	Paused        bool
+// EnemySnapshot is a read-only view of an enemy.
+type EnemySnapshot struct {
+	ID    uint32
+	DefID string
+	HP    int
+	MaxHP int
+	Pos   core.Pos
+	State int // AIState as int for rendering (stunned, alert, etc.)
 }
 
-// SystemSnapshot is a read-only view of a star system.
-type SystemSnapshot struct {
-	ID         int
-	Name       string
-	StarType   int
-	MapX, MapY float64
-	HasPlanet  bool
-	PlanetType int
-	PlanetSize int
-	Minerals   int
-	Special    int
-	Owner      int
+// ItemSnapshot is a read-only view of a ground item.
+type ItemSnapshot struct {
+	ID    uint32
+	DefID string
+	Qty   int
+	Pos   core.Pos
 }
 
-// ColonySnapshot is a read-only view of a colony.
-type ColonySnapshot struct {
-	SystemID       int
-	Faction        int
-	Population     float64
-	MaxPop         int
-	Factories      int
-	MaxFactory     int
-	Waste          float64
-	SliderShip     int
-	SliderDefense  int
-	SliderIndustry int
-	SliderEcology  int
-	SliderResearch int
-	MissileBases   int
-	ShieldLevel    int
-	HasStarbase    bool
-	BuildQueue     []string
-	BuildProgress  float64
-	TotalOutput    float64
-	ShipOutput     float64
-	DefenseOutput  float64
-	IndustryOutput float64
-	EcologyOutput  float64
-	ResearchOutput float64
+// PlayerSnapshot is a read-only view of a player on a planet.
+type PlayerSnapshot struct {
+	Key      string
+	CallSign string
+	HP       int
+	MaxHP    int
+	Pos      core.Pos
 }
 
-// FleetSnapshot is a read-only view of a fleet.
-type FleetSnapshot struct {
-	ID         uint64
-	Faction    int
-	SystemID   int
-	Ships      map[int]int
-	State      int
-	FromSystem int
-	ToSystem   int
-	Progress   float64
+// ProjectileSnapshot is a read-only view of an in-flight projectile.
+type ProjectileSnapshot struct {
+	ID    uint32
+	Pos   core.Pos
+	Glyph rune
+	Color string
 }
 
-// FactionSnapshot is a read-only view of faction state.
-type FactionSnapshot struct {
-	Naquadah    float64
-	TechTiers   [gamedata.TreeCount]int
-	TechAlloc   [gamedata.TreeCount]int
-	TechRP      [gamedata.TreeCount]float64
-	SystemCount int
-	Population  float64
-	TotalProd   float64
-}
-
-// CampaignSnapshot is a read-only view of campaign state.
-type CampaignSnapshot struct {
-	State     int
-	StartedAt time.Time
-	Winner    int
-}
-
-// DiplomacySnapshot is a read-only view of diplomacy state.
-type DiplomacySnapshot struct {
-	Relations [faction.Count][faction.Count]int
+// CharacterSnapshot is a read-only view of the local player's character.
+type CharacterSnapshot struct {
+	HP, MaxHP    int
+	Level        int
+	XP           int
+	WeaponName   string
+	ArmorName    string
+	AttackPower  int
+	DefensePower int
+	AmmoLoaded   int // current ammo in clip
+	AmmoMax      int // clip size
+	IsReloading  bool
 }
