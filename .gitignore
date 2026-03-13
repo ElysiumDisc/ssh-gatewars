@@ -11,6 +11,8 @@
 
 # SSH host keys
 .ssh/
+*_host_key
+*_host_key.pub
 
 # Go build cache
 /vendor/
