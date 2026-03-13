@@ -9,160 +9,121 @@ import (
 	"ssh-gatewars/internal/chat"
 )
 
-// ChatPanelState describes the visibility of the chat panel.
-type ChatPanelState int
+// ChatModel holds chat rendering state.
+type ChatModel struct{}
 
-const (
-	ChatHidden   ChatPanelState = iota // no chat visible
-	ChatCompact                         // bottom 6 rows
-	ChatExpanded                        // bottom half
-)
+func NewChatModel() ChatModel {
+	return ChatModel{}
+}
 
-// RenderChatPanel renders the chat overlay.
-func RenderChatPanel(
-	messages []chat.ChatMessage,
-	activeChannel string,
-	inputText string,
-	state ChatPanelState,
-	width, rows int,
-) string {
-	if state == ChatHidden || rows <= 0 {
-		return ""
+// renderChatPanel draws the chat panel with rounded border and themed colors.
+func renderChatPanel(msgs []chat.ChatMessage, input string, chatMode bool, w, h int) string {
+	if w < 12 {
+		w = 12
+	}
+	if h < 4 {
+		h = 4
 	}
 
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
-	timeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#44AAFF")).Bold(true)
-	systemStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#DDAA00"))
-	emoteStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#AA88CC"))
-	whisperStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#DD88DD"))
-	announceStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444")).Bold(true)
-	channelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#666688"))
-	inputStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#AAAAAA"))
-	backlogStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#444444"))
+	innerW := w - 4 // border + padding
 
-	var b strings.Builder
+	// Header
+	headerText := " COMMS "
+	dashLen := innerW - len(headerText)
+	if dashLen < 0 {
+		dashLen = 0
+	}
+	halfDash := dashLen / 2
+	header := StyleCyan.Render(strings.Repeat("─", halfDash) + headerText + strings.Repeat("─", dashLen-halfDash))
 
-	// Separator line
-	b.WriteString(dimStyle.Render(strings.Repeat("─", width)))
-	b.WriteString("\n")
-
-	// Message area (rows - 2 for separator and input line)
-	msgRows := rows - 2
-	if msgRows < 1 {
-		msgRows = 1
+	// Messages area: total height minus header(1) + separator(1) + input(1) + border(2)
+	msgHeight := h - 7
+	if msgHeight < 1 {
+		msgHeight = 1
 	}
 
-	// Take last N messages
-	start := 0
-	if len(messages) > msgRows {
-		start = len(messages) - msgRows
-	}
-	visible := messages[start:]
-
-	for _, msg := range visible {
-		ts := timeStyle.Render(fmt.Sprintf("[%02d:%02d]", msg.Timestamp.Hour(), msg.Timestamp.Minute()))
-		chTag := channelStyle.Render("[" + chat.ChannelDisplayName(msg.Channel) + "]")
-
-		var line string
+	// Style and wrap each message — wrap PLAIN text first, then apply color
+	var msgLines []string
+	for _, msg := range msgs {
 		switch msg.Kind {
 		case chat.MsgSystem:
-			line = fmt.Sprintf("%s %s %s", ts, chTag, systemStyle.Render(msg.Body))
-		case chat.MsgEmote:
-			line = fmt.Sprintf("%s %s %s", ts, chTag, emoteStyle.Render(msg.Body))
-		case chat.MsgWhisper:
-			line = fmt.Sprintf("%s %s %s <%s> %s", ts,
-				whisperStyle.Render("[DM]"),
-				chTag,
-				nameStyle.Render(msg.SenderCallsign),
-				msg.Body)
+			for _, line := range wrapText(msg.Body, innerW) {
+				msgLines = append(msgLines, StyleGold.Render(line))
+			}
 		case chat.MsgAnnounce:
-			line = fmt.Sprintf("%s %s", ts, announceStyle.Render("⚠ "+msg.Body))
-		default: // MsgChat
-			line = fmt.Sprintf("%s %s <%s> %s", ts, chTag,
-				nameStyle.Render(msg.SenderCallsign),
-				msg.Body)
+			style := lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true)
+			for _, line := range wrapText(msg.Body, innerW) {
+				msgLines = append(msgLines, style.Render(line))
+			}
+		case chat.MsgEmote:
+			for _, line := range wrapText(msg.Body, innerW) {
+				msgLines = append(msgLines, StyleDim.Render(line))
+			}
+		case chat.MsgWhisper:
+			style := lipgloss.NewStyle().Foreground(lipgloss.Color("#CC88FF"))
+			text := fmt.Sprintf("[%s] %s", msg.SenderCallsign, msg.Body)
+			for _, line := range wrapText(text, innerW) {
+				msgLines = append(msgLines, style.Render(line))
+			}
+		default:
+			// Normal chat: callsign in cyan, body in bright
+			prefix := StyleCyan.Render(truncate(msg.SenderCallsign, 12)) + StyleDim.Render(": ")
+			prefixLen := len(truncate(msg.SenderCallsign, 12)) + 2
+			bodyW := innerW - prefixLen
+			if bodyW < 10 {
+				bodyW = 10
+			}
+			wrapped := wrapText(msg.Body, bodyW)
+			for i, line := range wrapped {
+				if i == 0 {
+					msgLines = append(msgLines, prefix+StyleBright.Render(line))
+				} else {
+					msgLines = append(msgLines, pad(prefixLen)+StyleBright.Render(line))
+				}
+			}
 		}
-
-		if msg.IsBacklog {
-			line = backlogStyle.Render(line)
-		}
-
-		// Truncate to width
-		if lipgloss.Width(line) > width {
-			line = line[:width]
-		}
-
-		b.WriteString(line)
-		b.WriteString("\n")
 	}
 
-	// Pad empty rows
-	for i := len(visible); i < msgRows; i++ {
-		b.WriteString("\n")
+	// Show most recent messages that fit
+	start := len(msgLines) - msgHeight
+	if start < 0 {
+		start = 0
 	}
+	visible := msgLines[start:]
+
+	// Pad to fill height (empty lines at top)
+	for len(visible) < msgHeight {
+		visible = append([]string{""}, visible...)
+	}
+	if len(visible) > msgHeight {
+		visible = visible[len(visible)-msgHeight:]
+	}
+
+	// Separator
+	sep := StyleCyanDim.Render(strings.Repeat("─", innerW))
 
 	// Input line
-	prompt := channelStyle.Render("["+chat.ChannelDisplayName(activeChannel)+"]") + " > "
-	b.WriteString(inputStyle.Render(prompt + inputText + "_"))
-
-	return b.String()
-}
-
-// RenderToast renders a single toast notification line.
-func RenderToast(msg chat.ChatMessage, width int) string {
-	style := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
-	chTag := chat.ChannelDisplayName(msg.Channel)
-
-	var text string
-	if msg.Kind == chat.MsgSystem {
-		text = fmt.Sprintf("[%s] %s", chTag, msg.Body)
+	var inputLine string
+	if chatMode {
+		cursor := StyleCyan.Render("█")
+		inputLine = StyleCyan.Render("> ") + StyleBright.Render(truncate(input, innerW-4)) + cursor
 	} else {
-		text = fmt.Sprintf("[%s] <%s> %s", chTag, msg.SenderCallsign, msg.Body)
+		inputLine = FormatKeyHint("c", "chat")
 	}
 
-	if lipgloss.Width(text) > width {
-		text = text[:width-3] + "..."
-	}
+	// Assemble content for rounded box
+	var content []string
+	content = append(content, header)
+	content = append(content, visible...)
+	content = append(content, sep)
+	content = append(content, inputLine)
 
-	return style.Render(text)
-}
+	inner := strings.Join(content, "\n")
 
-// RenderPlayerList renders the online player list modal.
-func RenderPlayerList(players []PlayerListEntry, width, height int) string {
-	titleStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#44AAFF")).Bold(true)
-	headerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#888888"))
-	rowStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#AAAAAA"))
-	dimStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#666666"))
-
-	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString(titleStyle.Render("  ONLINE PLAYERS"))
-	b.WriteString("\n\n")
-	b.WriteString(headerStyle.Render(fmt.Sprintf("  %-16s  %-5s  %-20s", "Callsign", "Level", "Location")))
-	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("  " + strings.Repeat("─", 45)))
-	b.WriteString("\n")
-
-	for _, p := range players {
-		b.WriteString(rowStyle.Render(fmt.Sprintf("  %-16s  Lv%-3d  %-20s", p.Callsign, p.Level, p.Location)))
-		b.WriteString("\n")
-	}
-
-	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("  Press Tab or Esc to close"))
-	b.WriteString("\n")
-
-	return b.String()
-}
-
-// PlayerListEntry holds data for one player in the list.
-type PlayerListEntry struct {
-	Callsign string
-	Level    int
-	Location string
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorCyanDim).
+		Width(w - 2).
+		Height(h - 2).
+		Render(inner)
 }

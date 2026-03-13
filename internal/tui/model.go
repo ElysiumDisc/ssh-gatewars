@@ -1,30 +1,28 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"ssh-gatewars/internal/chat"
 	"ssh-gatewars/internal/core"
-	"ssh-gatewars/internal/entity"
-	"ssh-gatewars/internal/gamedata"
-	"ssh-gatewars/internal/simulation"
+	"ssh-gatewars/internal/engine"
+	"ssh-gatewars/internal/game"
 	"ssh-gatewars/internal/store"
 	"ssh-gatewars/internal/tui/views"
 )
 
+// tickMsg is sent at the render frame rate.
 type tickMsg time.Time
 
-// chatMsg wraps a chat message for Bubbletea's Cmd system.
+// chatMsg wraps an incoming chat message.
 type chatMsg chat.ChatMessage
 
 // ModelConfig holds dependencies for creating a TUI model.
 type ModelConfig struct {
-	Engine  *simulation.Engine
+	Engine  *engine.Engine
 	Store   *store.PlayerStore
 	ChatHub *chat.Hub
 	Session *core.SessionInfo
@@ -32,95 +30,67 @@ type ModelConfig struct {
 	Height  int
 }
 
-// Model is the per-session Bubbletea model.
+// Model is the top-level Bubbletea model for a player session.
 type Model struct {
-	engine  *simulation.Engine
+	state   State
+	session *core.SessionInfo
+	engine  *engine.Engine
 	store   *store.PlayerStore
 	chatHub *chat.Hub
-	session *core.SessionInfo
-	char    *entity.Character
 
-	state    ViewState
-	width    int
-	height   int
+	// Player data
+	callsign    string
+	player      *store.PlayerRecord
+	chatOutbox  chan chat.ChatMessage
+	chatVisible bool
 
-	// Fog of war per planet (reset on planet change)
-	fog       *views.FogOfWar
-	fogPlanet string // which planet the fog is for
+	// Active defense state
+	activePlanetID int
+	defenseSnap    *engine.DefenseSnapshot
 
-	// DHD state
-	dhdSymbols  []int
-	dhdCursor   int
-	dhdInput    string // typed address string
+	// View models
+	splash   views.SplashModel
+	throne   views.ThroneModel
+	galaxy   views.GalaxyModel
+	defense  views.DefenseModel
+	chatView views.ChatModel
 
-	// Inventory state
-	invCursor   int
+	// Chat input
+	chatInput string
+	chatMode  bool // true when typing in chat
 
-	// Address book state
-	addrCursor  int
+	// Animation
+	frameCount int
 
-	// Call sign input
-	callSignBuf string
+	// Layout
+	width, height int
 
-	// Flash message
-	flash     string
-	flashTime time.Time
-
-	// Autosave timer
-	lastSave time.Time
-
-	// Chat state
-	chatOutbox   chan chat.ChatMessage  // receives messages from hub
-	chatMessages []chat.ChatMessage     // visible message buffer
-	chatInput    string                 // current typing buffer
-	chatPanel    views.ChatPanelState   // Hidden/Compact/Expanded
-	chatFocus    FocusTarget            // Game or Chat
-	chatChannel  string                 // active channel key
-
-	// Toast notification
-	toast     string
-	toastTime time.Time
-
-	// Player list modal
-	playerListOpen bool
-
-	// Aim mode
-	aimTarget core.Pos // reticle position
-
-	// Star map
-	starMap *views.StarMapState
+	// Chat messages buffer
+	chatMessages []chat.ChatMessage
 }
 
-// NewModel creates a new TUI model for a session.
-func NewModel(cfg ModelConfig) tea.Model {
-	m := &Model{
-		engine:   cfg.Engine,
-		store:    cfg.Store,
-		chatHub:  cfg.ChatHub,
-		session:  cfg.Session,
-		state:    ViewSplash,
-		width:    cfg.Width,
-		height:   cfg.Height,
-		lastSave: time.Now(),
-		chatOutbox:  make(chan chat.ChatMessage, 200),
-		chatPanel:   views.ChatHidden,
-		chatFocus:   FocusGame,
-		chatChannel: "ops",
+// NewModel creates a new TUI model for a player session.
+func NewModel(cfg ModelConfig) *Model {
+	return &Model{
+		state:       StateSplash,
+		session:     cfg.Session,
+		engine:      cfg.Engine,
+		store:       cfg.Store,
+		chatHub:     cfg.ChatHub,
+		chatOutbox:  make(chan chat.ChatMessage, 256),
+		width:       cfg.Width,
+		height:      cfg.Height,
+		splash:      views.NewSplashModel(),
+		throne:      views.NewThroneModel(),
+		galaxy:      views.NewGalaxyModel(),
+		defense:     views.NewDefenseModel(),
+		chatView:    views.NewChatModel(),
+		chatMessages: make([]chat.ChatMessage, 0, 100),
+		activePlanetID: -1,
 	}
-
-	// Try to load existing character
-	if c, err := cfg.Store.LoadCharacter(cfg.Session.SSHKey, core.DefaultConfig()); err == nil && c != nil {
-		m.char = c
-		m.state = ViewSGC
-		cfg.Engine.RegisterCharacter(c)
-		m.ensureFog()
-		m.chatConnect()
-	}
-
-	return m
 }
 
-// NewRejectModel creates a model that displays a rejection message then quits.
+// NewRejectModel creates a model that shows a rejection message and exits.
 func NewRejectModel(reason string) tea.Model {
 	return &rejectModel{reason: reason}
 }
@@ -129,729 +99,25 @@ type rejectModel struct {
 	reason string
 }
 
-func (m *rejectModel) Init() tea.Cmd { return nil }
-func (m *rejectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if _, ok := msg.(tea.KeyMsg); ok {
-		return m, tea.Quit
-	}
-	return m, nil
-}
-func (m *rejectModel) View() string {
-	return fmt.Sprintf("\n  %s\n\n  Press any key to disconnect.\n", m.reason)
-}
+func (m *rejectModel) Init() tea.Cmd  { return tea.Quit }
+func (m *rejectModel) Update(tea.Msg) (tea.Model, tea.Cmd) { return m, tea.Quit }
+func (m *rejectModel) View() string   { return "\n  " + m.reason + "\n\n" }
 
-// Init implements tea.Model.
+// Init starts the model.
 func (m *Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{
-		tea.Tick(time.Second/15, func(t time.Time) tea.Msg {
-			return tickMsg(t)
-		}),
-	}
-	if m.chatHub != nil {
-		cmds = append(cmds, m.waitForChatMsg())
-	}
-	return tea.Batch(cmds...)
+	return tea.Batch(
+		m.tickCmd(),
+		m.listenChat(),
+	)
 }
 
-// Update implements tea.Model.
-func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		return m, nil
-
-	case chatMsg:
-		cm := chat.ChatMessage(msg)
-		m.chatMessages = append(m.chatMessages, cm)
-		// Keep last 200 messages
-		if len(m.chatMessages) > 200 {
-			m.chatMessages = m.chatMessages[len(m.chatMessages)-200:]
-		}
-		// Show toast if chat panel is hidden
-		if m.chatPanel == views.ChatHidden {
-			if cm.Kind == chat.MsgSystem {
-				m.toast = fmt.Sprintf("[%s] %s", chat.ChannelDisplayName(cm.Channel), cm.Body)
-			} else {
-				m.toast = fmt.Sprintf("[%s] <%s> %s", chat.ChannelDisplayName(cm.Channel), cm.SenderCallsign, cm.Body)
-			}
-			m.toastTime = time.Now()
-		}
-		// Update active channel from hub
-		m.chatChannel = cm.Channel
-		return m, m.waitForChatMsg()
-
-	case tickMsg:
-		// Drain engine events
-		if m.char != nil {
-			for _, ev := range m.engine.DrainEvents(m.session.SSHKey) {
-				m.flash = ev
-				m.flashTime = time.Now()
-			}
-		}
-
-		// Clear old flash
-		if m.flash != "" && time.Since(m.flashTime) > 4*time.Second {
-			m.flash = ""
-		}
-
-		// Clear old toast
-		if m.toast != "" && time.Since(m.toastTime) > 5*time.Second {
-			m.toast = ""
-		}
-
-		// Autosave
-		if m.char != nil && time.Since(m.lastSave) > 60*time.Second {
-			m.saveCharacter()
-			m.lastSave = time.Now()
-		}
-
-		// Update fog
-		m.ensureFog()
-		if m.char != nil && m.fog != nil {
-			m.fog.Reveal(m.char.Pos, 8)
-		}
-
-		return m, tea.Tick(time.Second/15, func(t time.Time) tea.Msg {
-			return tickMsg(t)
-		})
-
-	case tea.KeyMsg:
-		m.session.LastInput = time.Now()
-		return m.handleKey(msg)
-	}
-
-	return m, nil
-}
-
-func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// If chat has focus, route all keys to chat input
-	if m.chatFocus == FocusChat {
-		return m.updateChatInput(msg)
-	}
-
-	// Player list modal intercepts keys
-	if m.playerListOpen {
-		if msg.String() == "tab" || msg.String() == "esc" {
-			m.playerListOpen = false
-		}
-		return m, nil
-	}
-
-	switch m.state {
-	case ViewSplash:
-		return m.updateSplash(msg)
-	case ViewCallSign:
-		return m.updateCallSign(msg)
-	case ViewSGC, ViewPlanet:
-		return m.updateExplore(msg)
-	case ViewAimMode:
-		return m.updateAimMode(msg)
-	case ViewStarMap:
-		return m.updateStarMap(msg)
-	case ViewDHD:
-		return m.updateDHD(msg)
-	case ViewInventory:
-		return m.updateInventory(msg)
-	case ViewAddressBook:
-		return m.updateAddressBook(msg)
-	case ViewHelp:
-		m.state = m.previousExploreState()
-		return m, nil
-	case ViewDead:
-		m.state = ViewSGC
-		return m, nil
-	}
-	return m, nil
-}
-
-func (m *Model) updateSplash(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if MapKey(msg) == KeyQuit {
-		return m, tea.Quit
-	}
-	if m.char != nil {
-		// Returning player
-		if m.char.Location == "sgc" {
-			m.state = ViewSGC
-		} else {
-			m.state = ViewPlanet
-		}
-	} else {
-		m.state = ViewCallSign
-		m.callSignBuf = ""
-	}
-	return m, nil
-}
-
-func (m *Model) updateCallSign(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		if len(m.callSignBuf) > 0 {
-			m.createCharacter(m.callSignBuf)
-			m.state = ViewSGC
-		}
-	case "backspace":
-		if len(m.callSignBuf) > 0 {
-			m.callSignBuf = m.callSignBuf[:len(m.callSignBuf)-1]
-		}
-	case "esc", "ctrl+c":
-		return m, tea.Quit
-	default:
-		r := msg.String()
-		if len(r) == 1 && len(m.callSignBuf) < 20 {
-			m.callSignBuf += r
-		}
-	}
-	return m, nil
-}
-
-func (m *Model) updateExplore(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	action := MapKey(msg)
-
-	switch action {
-	case KeyQuit:
-		m.chatDisconnect()
-		m.saveCharacter()
-		m.engine.UnregisterCharacter(m.session.SSHKey)
-		return m, tea.Quit
-	case KeyUp:
-		m.enqueueMove(core.DirUp)
-	case KeyDown:
-		m.enqueueMove(core.DirDown)
-	case KeyLeft:
-		m.enqueueMove(core.DirLeft)
-	case KeyRight:
-		m.enqueueMove(core.DirRight)
-	case KeyInteract, KeyPickup:
-		m.engine.EnqueueAction(simulation.PlayerAction{
-			Type:      simulation.ActionInteract,
-			PlayerKey: m.session.SSHKey,
-		})
-	case KeyDial:
-		m.state = ViewDHD
-		m.dhdSymbols = nil
-		m.dhdCursor = 0
-		m.dhdInput = ""
-	case KeyInventory:
-		m.state = ViewInventory
-		m.invCursor = 0
-	case KeyAddressBook:
-		m.state = ViewAddressBook
-		m.addrCursor = 0
-	case KeyFire:
-		if m.char != nil && m.char.Weapon != nil {
-			wDef := gamedata.Items[m.char.Weapon.DefID]
-			if wDef.WType == gamedata.WeaponRanged {
-				m.state = ViewAimMode
-				m.aimTarget = m.char.Pos
-			} else {
-				m.flash = "Equip a ranged weapon to fire."
-				m.flashTime = time.Now()
-			}
-		}
-	case KeyReload:
-		m.engine.EnqueueAction(simulation.PlayerAction{
-			Type:      simulation.ActionReload,
-			PlayerKey: m.session.SSHKey,
-		})
-	case KeyChat:
-		m.toggleChat()
-	case KeyPlayerList:
-		m.playerListOpen = !m.playerListOpen
-	case KeyStarMap:
-		if m.char != nil {
-			m.starMap = views.NewStarMapState(m.char.DiscoveredAddresses, m.char.Location)
-			m.state = ViewStarMap
-		}
-	case KeyHelp:
-		m.state = ViewHelp
-	case KeyCancel:
-		if m.chatPanel != views.ChatHidden {
-			m.chatPanel = views.ChatHidden
-			m.chatFocus = FocusGame
-		} else if m.state == ViewPlanet {
-			// Can't escape from a planet — must dial the gate
-		} else {
-			m.chatDisconnect()
-			m.saveCharacter()
-			m.engine.UnregisterCharacter(m.session.SSHKey)
-			return m, tea.Quit
-		}
-	}
-	return m, nil
-}
-
-func (m *Model) updateDHD(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.state = m.previousExploreState()
-		return m, nil
-	case "backspace":
-		if len(m.dhdSymbols) > 0 {
-			m.dhdSymbols = m.dhdSymbols[:len(m.dhdSymbols)-1]
-		}
-		if len(m.dhdInput) > 0 {
-			m.dhdInput = m.dhdInput[:len(m.dhdInput)-1]
-		}
-	case "left":
-		if m.dhdCursor > 0 {
-			m.dhdCursor--
-		}
-	case "right":
-		if m.dhdCursor < gamedata.GlyphCount-1 {
-			m.dhdCursor++
-		}
-	case "up":
-		if m.dhdCursor >= 10 {
-			m.dhdCursor -= 10
-		}
-	case "down":
-		if m.dhdCursor+10 < gamedata.GlyphCount {
-			m.dhdCursor += 10
-		}
-	case "enter":
-		if len(m.dhdSymbols) < 7 {
-			// Lock current glyph
-			m.dhdSymbols = append(m.dhdSymbols, m.dhdCursor)
-		}
-		if len(m.dhdSymbols) == 7 {
-			// Try to dial
-			var addr gamedata.GateAddress
-			copy(addr[:], m.dhdSymbols)
-			if addr.IsValid() {
-				m.engine.EnqueueAction(simulation.PlayerAction{
-					Type:      simulation.ActionDialGate,
-					PlayerKey: m.session.SSHKey,
-					Address:   addr,
-				})
-				m.state = ViewPlanet
-				m.fogPlanet = "" // force fog reset
-			} else {
-				m.flash = "Invalid address — duplicate glyphs!"
-				m.flashTime = time.Now()
-				m.dhdSymbols = nil
-			}
-		}
-	default:
-		// Typed input for quick-dial (e.g. "26-6-14-31-11-29-0")
-		r := msg.String()
-		if len(r) == 1 && (r[0] >= '0' && r[0] <= '9' || r[0] == '-') {
-			m.dhdInput += r
-			// Try to parse as complete address
-			if addr, ok := gamedata.ParseAddress(m.dhdInput); ok {
-				m.engine.EnqueueAction(simulation.PlayerAction{
-					Type:      simulation.ActionDialGate,
-					PlayerKey: m.session.SSHKey,
-					Address:   addr,
-				})
-				m.state = ViewPlanet
-				m.fogPlanet = ""
-			}
-		}
-	}
-	return m, nil
-}
-
-func (m *Model) updateInventory(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.char == nil {
-		return m, nil
-	}
-
-	action := MapKey(msg)
-	switch action {
-	case KeyCancel:
-		m.state = m.previousExploreState()
-	case KeyUp:
-		if m.invCursor > 0 {
-			m.invCursor--
-		}
-	case KeyDown:
-		if m.invCursor < len(m.char.Inventory)-1 {
-			m.invCursor++
-		}
-	case KeyEquip:
-		m.engine.EnqueueAction(simulation.PlayerAction{
-			Type:      simulation.ActionEquip,
-			PlayerKey: m.session.SSHKey,
-			ItemIndex: m.invCursor,
-		})
-	case KeyUse:
-		m.engine.EnqueueAction(simulation.PlayerAction{
-			Type:      simulation.ActionUseItem,
-			PlayerKey: m.session.SSHKey,
-			ItemIndex: m.invCursor,
-		})
-	case KeyDrop:
-		// Drop item on ground (simplified: just remove)
-		if m.invCursor >= 0 && m.invCursor < len(m.char.Inventory) {
-			m.char.RemoveItem(m.char.Inventory[m.invCursor].DefID, 1)
-			if m.invCursor >= len(m.char.Inventory) && m.invCursor > 0 {
-				m.invCursor--
-			}
-		}
-	}
-	return m, nil
-}
-
-func (m *Model) updateAddressBook(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.char == nil {
-		return m, nil
-	}
-
-	action := MapKey(msg)
-	switch action {
-	case KeyCancel:
-		m.state = m.previousExploreState()
-	case KeyUp:
-		if m.addrCursor > 0 {
-			m.addrCursor--
-		}
-	case KeyDown:
-		if m.addrCursor < len(m.char.DiscoveredAddresses)-1 {
-			m.addrCursor++
-		}
-	case KeyConfirm:
-		if m.addrCursor >= 0 && m.addrCursor < len(m.char.DiscoveredAddresses) {
-			addr := m.char.DiscoveredAddresses[m.addrCursor]
-			m.engine.EnqueueAction(simulation.PlayerAction{
-				Type:      simulation.ActionDialGate,
-				PlayerKey: m.session.SSHKey,
-				Address:   addr,
-			})
-			m.state = ViewPlanet
-			m.fogPlanet = ""
-		}
-	}
-	return m, nil
-}
-
-// View implements tea.Model.
-func (m *Model) View() string {
-	switch m.state {
-	case ViewSplash:
-		return views.RenderSplash(m.width, m.height)
-	case ViewCallSign:
-		return m.viewCallSign()
-	case ViewSGC, ViewPlanet:
-		return m.viewExplore()
-	case ViewAimMode:
-		return m.viewAimMode()
-	case ViewStarMap:
-		if m.starMap != nil {
-			return views.RenderStarMap(m.starMap, m.width, m.height)
-		}
-	case ViewDHD:
-		return views.RenderDHD(m.dhdSymbols, m.dhdCursor, m.width, m.height)
-	case ViewInventory:
-		if m.char != nil {
-			return views.RenderInventory(m.char, m.invCursor, m.width, m.height)
-		}
-	case ViewAddressBook:
-		if m.char != nil {
-			return views.RenderAddressBook(m.char.DiscoveredAddresses, m.addrCursor)
-		}
-	case ViewHelp:
-		return views.RenderHelp()
-	case ViewDead:
-		return m.viewDead()
-	}
-	return ""
-}
-
-func (m *Model) viewCallSign() string {
-	titleStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#44AAFF")).Bold(true)
-	promptStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FFAA44"))
-	inputStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
-
-	var b strings.Builder
-	b.WriteString("\n\n")
-	b.WriteString(titleStyle.Render("  Welcome to Stargate Command"))
-	b.WriteString("\n\n")
-	b.WriteString(promptStyle.Render("  Enter your call sign, soldier: "))
-	b.WriteString(inputStyle.Render(m.callSignBuf))
-	b.WriteString(inputStyle.Render("_"))
-	b.WriteString("\n\n")
-	b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render("  (Press Enter to confirm)"))
-	return b.String()
-}
-
-func (m *Model) viewExplore() string {
-	if m.char == nil {
-		return "Loading..."
-	}
-
-	snap := m.engine.GetPlanetSnapshot(m.session.SSHKey)
-	if snap == nil {
-		return "Loading planet..."
-	}
-
-	// Update character position from engine
-	c := m.engine.GetCharacter(m.session.SSHKey)
-	if c != nil {
-		m.char = c
-	}
-
-	// Determine chat rows
-	chatRows := 0
-	switch m.chatPanel {
-	case views.ChatCompact:
-		chatRows = 8 // 6 messages + separator + input
-	case views.ChatExpanded:
-		chatRows = m.height / 2
-	}
-
-	// Compute view dimensions (reserve 3 for HUD + chat rows)
-	viewH := m.height - 3 - chatRows
-	if viewH < 5 {
-		viewH = 5
-	}
-	viewW := m.width
-	if viewW < 10 {
-		viewW = 10
-	}
-
-	// Render map
-	mapView := views.RenderPlanet(snap, m.char.Pos, m.fog, viewW, viewH, m.session.SSHKey)
-
-	// Render HUD
-	weaponName := "Fists"
-	if m.char.Weapon != nil {
-		weaponName = m.char.Weapon.Def().Name
-	}
-
-	hud := views.RenderHUD(views.HUDData{
-		HP:          m.char.HP,
-		MaxHP:       m.char.MaxHP,
-		Level:       m.char.Level,
-		XP:          m.char.XP,
-		WeaponName:  weaponName,
-		PlanetName:  snap.PlanetName,
-		Biome:       snap.Biome,
-		Threat:      snap.Threat,
-		Flash:       m.flash,
-		OnlineCount: m.engine.GetOnlineCount(),
-	}, m.width)
-
-	result := mapView + "\n" + hud
-
-	// Toast notification (when chat hidden)
-	if m.chatPanel == views.ChatHidden && m.toast != "" {
-		result += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Render(m.toast)
-	}
-
-	// Chat panel overlay
-	if m.chatPanel != views.ChatHidden {
-		chatView := views.RenderChatPanel(
-			m.chatMessages,
-			m.chatChannel,
-			m.chatInput,
-			m.chatPanel,
-			m.width,
-			chatRows,
-		)
-		result += "\n" + chatView
-	}
-
-	// Player list modal (rendered on top)
-	if m.playerListOpen {
-		entries := m.buildPlayerList(snap)
-		result = views.RenderPlayerList(entries, m.width, m.height)
-	}
-
-	return result
-}
-
-func (m *Model) viewAimMode() string {
-	if m.char == nil || m.char.Weapon == nil {
-		return "No weapon equipped."
-	}
-
-	snap := m.engine.GetPlanetSnapshot(m.session.SSHKey)
-	if snap == nil {
-		return "Loading..."
-	}
-
-	c := m.engine.GetCharacter(m.session.SSHKey)
-	if c != nil {
-		m.char = c
-	}
-
-	viewH := m.height - 3
-	if viewH < 5 {
-		viewH = 5
-	}
-	viewW := m.width
-	if viewW < 10 {
-		viewW = 10
-	}
-
-	wDef := gamedata.Items[m.char.Weapon.DefID]
-	return views.RenderAimOverlay(snap, m.char.Pos, m.aimTarget, m.fog, viewW, viewH, m.session.SSHKey, wDef.Range)
-}
-
-func (m *Model) viewDead() string {
-	style := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444")).Bold(true)
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
-	return fmt.Sprintf("\n\n%s\n\n%s\n",
-		style.Render("  YOU HAVE FALLEN"),
-		dim.Render("  Press any key to respawn at SGC..."))
-}
-
-// Helpers
-
-func (m *Model) createCharacter(callSign string) {
-	cfg := core.DefaultConfig()
-	m.char = entity.NewCharacter(m.session.SSHKey, m.session.DisplayName, callSign, cfg)
-
-	// Save to DB
-	m.store.UpsertPlayer(m.session.SSHKey, m.session.DisplayName, callSign)
-	m.store.SaveCharacter(m.char)
-
-	// Register with engine
-	m.engine.RegisterCharacter(m.char)
-	m.ensureFog()
-
-	// Connect to chat
-	m.chatConnect()
-}
-
-func (m *Model) saveCharacter() {
-	if m.char != nil {
-		m.store.SaveCharacter(m.char)
-	}
-}
-
-func (m *Model) enqueueMove(dir core.Pos) {
-	m.engine.EnqueueAction(simulation.PlayerAction{
-		Type:      simulation.ActionMove,
-		PlayerKey: m.session.SSHKey,
-		Dir:       dir,
+func (m *Model) tickCmd() tea.Cmd {
+	return tea.Tick(time.Second/time.Duration(15), func(t time.Time) tea.Msg {
+		return tickMsg(t)
 	})
 }
 
-func (m *Model) ensureFog() {
-	if m.char == nil {
-		return
-	}
-	snap := m.engine.GetPlanetSnapshot(m.session.SSHKey)
-	if snap == nil {
-		return
-	}
-	planetKey := snap.AddressCode
-	if m.fogPlanet != planetKey || m.fog == nil {
-		m.fog = views.NewFogOfWar(snap.MapWidth, snap.MapHeight)
-		m.fogPlanet = planetKey
-	}
-}
-
-func (m *Model) previousExploreState() ViewState {
-	if m.char != nil && m.char.Location == "sgc" {
-		return ViewSGC
-	}
-	return ViewPlanet
-}
-
-// --- Aim mode ---
-
-func (m *Model) updateAimMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.state = m.previousExploreState()
-	case "enter", "f":
-		// Fire at target
-		m.engine.EnqueueAction(simulation.PlayerAction{
-			Type:       simulation.ActionFire,
-			PlayerKey:  m.session.SSHKey,
-			FireTarget: m.aimTarget,
-		})
-		m.state = m.previousExploreState()
-	case "up", "k", "w":
-		m.aimTarget.Y--
-	case "down", "j", "s":
-		m.aimTarget.Y++
-	case "left", "h", "a":
-		m.aimTarget.X--
-	case "right", "l", "d":
-		m.aimTarget.X++
-	}
-	return m, nil
-}
-
-// --- Star map ---
-
-func (m *Model) updateStarMap(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.starMap == nil {
-		m.state = m.previousExploreState()
-		return m, nil
-	}
-
-	panSpeed := 3.0
-	switch msg.String() {
-	case "esc", "m":
-		m.state = m.previousExploreState()
-	case "up", "k", "w":
-		m.starMap.CamY -= panSpeed
-	case "down", "j", "s":
-		m.starMap.CamY += panSpeed
-	case "left", "h", "a":
-		m.starMap.CamX -= panSpeed
-	case "right", "l", "d":
-		m.starMap.CamX += panSpeed
-	case "+", "=":
-		if m.starMap.Zoom < 4 {
-			m.starMap.Zoom++
-		}
-	case "-", "_":
-		if m.starMap.Zoom > 0 {
-			m.starMap.Zoom--
-		}
-	case "tab":
-		// Cycle to next star
-		if len(m.starMap.Stars) > 0 {
-			m.starMap.Cursor = (m.starMap.Cursor + 1) % len(m.starMap.Stars)
-			star := m.starMap.Stars[m.starMap.Cursor]
-			m.starMap.CamX = star.WorldX
-			m.starMap.CamY = star.WorldY
-		}
-	case "shift+tab":
-		// Cycle to previous star
-		if len(m.starMap.Stars) > 0 {
-			m.starMap.Cursor--
-			if m.starMap.Cursor < 0 {
-				m.starMap.Cursor = len(m.starMap.Stars) - 1
-			}
-			star := m.starMap.Stars[m.starMap.Cursor]
-			m.starMap.CamX = star.WorldX
-			m.starMap.CamY = star.WorldY
-		}
-	case "enter":
-		// Dial selected star's address
-		if m.starMap.Cursor >= 0 && m.starMap.Cursor < len(m.starMap.Stars) {
-			addr := m.starMap.Stars[m.starMap.Cursor].Address
-			if addr == gamedata.EarthAddress && m.char.Location == "sgc" {
-				m.flash = "You're already at SGC."
-				m.flashTime = time.Now()
-			} else {
-				m.engine.EnqueueAction(simulation.PlayerAction{
-					Type:      simulation.ActionDialGate,
-					PlayerKey: m.session.SSHKey,
-					Address:   addr,
-				})
-				m.state = ViewPlanet
-				m.fogPlanet = ""
-			}
-		}
-	}
-	return m, nil
-}
-
-// --- Chat integration ---
-
-// waitForChatMsg returns a Cmd that waits for the next chat message.
-func (m *Model) waitForChatMsg() tea.Cmd {
+func (m *Model) listenChat() tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-m.chatOutbox
 		if !ok {
@@ -861,23 +127,368 @@ func (m *Model) waitForChatMsg() tea.Cmd {
 	}
 }
 
-// chatConnect sends a connect event to the chat hub.
-func (m *Model) chatConnect() {
-	if m.chatHub == nil || m.char == nil {
+// Update handles input and state transitions.
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
+	case tickMsg:
+		// Refresh defense snapshot if active
+		if m.state == StateDefense && m.activePlanetID >= 0 {
+			snap := m.engine.GetDefenseSnapshot(m.activePlanetID)
+			if snap != nil {
+				m.defenseSnap = snap
+			}
+			// Check if defense ended
+			if snap != nil && (snap.Liberated || snap.Failed) {
+				m.handleDefenseEnd(snap)
+			}
+		}
+		m.splash.Tick()
+		m.throne.Tick()
+		m.frameCount++
+		return m, m.tickCmd()
+
+	case chatMsg:
+		cm := chat.ChatMessage(msg)
+		m.chatMessages = append(m.chatMessages, cm)
+		if len(m.chatMessages) > 100 {
+			m.chatMessages = m.chatMessages[len(m.chatMessages)-100:]
+		}
+		return m, m.listenChat()
+
+	case tea.KeyMsg:
+		return m.handleKey(msg)
+	}
+
+	return m, nil
+}
+
+func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	// Global: ctrl+c to quit
+	if key == "ctrl+c" {
+		m.cleanup()
+		return m, tea.Quit
+	}
+
+	// Chat mode intercepts all keys
+	if m.chatMode {
+		return m.handleChatInput(msg)
+	}
+
+	switch m.state {
+	case StateSplash:
+		// Any key advances to callsign
+		m.state = StateCallsign
+		// Check if we have a saved callsign
+		if cs, err := m.store.GetCallsign(m.session.SSHKey); err == nil && cs != "" {
+			m.callsign = cs
+			m.loadPlayer()
+			m.connectChat()
+			m.state = StateAtlantis
+		}
+		return m, nil
+
+	case StateCallsign:
+		return m.handleCallsignInput(msg)
+
+	case StateAtlantis:
+		switch key {
+		case "t":
+			m.loadPlayer() // refresh before showing upgrades
+			m.state = StateThrone
+		case "g":
+			m.state = StateGalaxy
+			m.galaxy.Reset(m.engine.GetGalaxySnapshot())
+		case "c":
+			m.chatMode = true
+		case "q":
+			m.cleanup()
+			return m, tea.Quit
+		}
+		return m, nil
+
+	case StateThrone:
+		return m.handleThroneInput(msg)
+
+	case StateGalaxy:
+		switch key {
+		case "q", "esc":
+			m.state = StateAtlantis
+		case "up", "k":
+			m.galaxy.MoveSelection(-1)
+		case "down", "j":
+			m.galaxy.MoveSelection(1)
+		case "enter":
+			planetID := m.galaxy.SelectedPlanetID()
+			if planetID >= 0 {
+				m.deployToPlanet(planetID)
+			}
+		case "c":
+			m.chatMode = true
+		}
+		return m, nil
+
+	case StateDefense:
+		switch key {
+		case "q", "esc":
+			m.retreatFromPlanet()
+			m.state = StateAtlantis
+		case "c":
+			m.chatMode = true
+		case "tab":
+			m.chatVisible = !m.chatVisible
+		case "1":
+			m.setTactic(game.TacticSpread)
+		case "2":
+			m.setTactic(game.TacticFocus)
+		case "3":
+			m.setTactic(game.TacticPerimeter)
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m *Model) handleCallsignInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "enter":
+		if len(m.callsign) >= 2 {
+			m.store.UpsertPlayer(m.session.SSHKey, m.session.DisplayName, m.callsign)
+			m.store.SetCallsign(m.session.SSHKey, m.callsign)
+			m.loadPlayer()
+			m.connectChat()
+			m.state = StateAtlantis
+		}
+	case "backspace":
+		if len(m.callsign) > 0 {
+			m.callsign = m.callsign[:len(m.callsign)-1]
+		}
+	default:
+		if len(key) == 1 && len(m.callsign) < 16 {
+			c := key[0]
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' {
+				m.callsign += key
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) handleThroneInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "q", "esc":
+		m.state = StateAtlantis
+	case "up", "k":
+		m.throne.MoveSelection(-1)
+	case "down", "j":
+		m.throne.MoveSelection(1)
+	case "enter":
+		m.executeThroneUpgrade()
+	}
+	return m, nil
+}
+
+func (m *Model) executeThroneUpgrade() {
+	if m.player == nil {
 		return
 	}
+	sel := m.throne.Selected
+
+	switch sel {
+	case 0: // Chair upgrade
+		if m.player.ChairLevel >= views.MaxChairLevel {
+			m.throne.SetStatus("Already at max level!", views.StyleDim)
+			return
+		}
+		cost := views.ChairUpgradeCost(m.player.ChairLevel)
+		ok, err := m.store.SpendZPM(m.session.SSHKey, cost)
+		if err != nil || !ok {
+			m.throne.SetStatus("Not enough ZPM!", views.StyleDanger)
+			return
+		}
+		m.store.UpgradeChair(m.session.SSHKey)
+		m.loadPlayer()
+		m.throne.SetStatus("Shield Generator upgraded!", views.StyleSuccess)
+
+	case 1, 2, 3: // Drone tier
+		tier := sel
+		if m.player.DroneTier == tier {
+			m.throne.SetStatus("Already equipped!", views.StyleDim)
+			return
+		}
+		cost := views.DroneTierCost(tier)
+		if cost == 0 {
+			return
+		}
+		ok, err := m.store.SpendZPM(m.session.SSHKey, cost)
+		if err != nil || !ok {
+			m.throne.SetStatus("Not enough ZPM!", views.StyleDanger)
+			return
+		}
+		m.store.UpgradeDroneTier(m.session.SSHKey, tier)
+		m.loadPlayer()
+		m.throne.SetStatus("Drone weapons upgraded!", views.StyleSuccess)
+
+	case 4: // Faction switch
+		currentFaction := game.Faction(m.player.Faction)
+		newFaction := game.FactionAncient
+		if currentFaction == game.FactionAncient {
+			newFaction = game.FactionOri
+		}
+		// Reset upgrades + switch faction
+		m.store.ResetPlayer(m.session.SSHKey)
+		m.store.SetFaction(m.session.SSHKey, int(newFaction))
+		m.loadPlayer()
+		name := game.FactionDefs[newFaction].Name
+		m.throne.SetStatus("Switched to "+name+" Path! Upgrades reset.", views.StyleGold)
+
+	case 5: // Full reset
+		m.store.ResetPlayer(m.session.SSHKey)
+		m.loadPlayer()
+		m.throne.SetStatus("All progress reset. Fresh start.", views.StyleDanger)
+	}
+}
+
+func (m *Model) handleChatInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "esc":
+		m.chatMode = false
+		m.chatInput = ""
+	case "enter":
+		if m.chatInput != "" {
+			if strings.HasPrefix(m.chatInput, "/") {
+				// Slash command
+				parts := strings.SplitN(m.chatInput[1:], " ", 2)
+				cmd := parts[0]
+				args := ""
+				if len(parts) > 1 {
+					args = parts[1]
+				}
+				m.chatHub.Incoming <- chat.ChatEvent{
+					Type:        chat.EventSlashCommand,
+					Fingerprint: m.session.SSHKey,
+					Callsign:    m.callsign,
+					Command:     cmd,
+					Args:        args,
+				}
+			} else {
+				m.chatHub.Incoming <- chat.ChatEvent{
+					Type:        chat.EventSendMessage,
+					Fingerprint: m.session.SSHKey,
+					Callsign:    m.callsign,
+					Body:        m.chatInput,
+				}
+			}
+			m.chatInput = ""
+		}
+		m.chatMode = false
+	case "backspace":
+		if len(m.chatInput) > 0 {
+			m.chatInput = m.chatInput[:len(m.chatInput)-1]
+		}
+	default:
+		if len(key) == 1 && len(m.chatInput) < 500 {
+			m.chatInput += key
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) loadPlayer() {
+	rec, err := m.store.GetPlayer(m.session.SSHKey)
+	if err != nil || rec == nil {
+		m.store.UpsertPlayer(m.session.SSHKey, m.session.DisplayName, m.callsign)
+		rec, _ = m.store.GetPlayer(m.session.SSHKey)
+	}
+	m.player = rec
+}
+
+func (m *Model) connectChat() {
 	m.chatHub.Incoming <- chat.ChatEvent{
 		Type:        chat.EventConnect,
 		Fingerprint: m.session.SSHKey,
-		Callsign:    m.char.CallSign,
+		Callsign:    m.callsign,
 		Outbox:      m.chatOutbox,
 	}
 }
 
-// chatDisconnect sends a disconnect event to the chat hub.
-func (m *Model) chatDisconnect() {
-	if m.chatHub == nil {
+func (m *Model) deployToPlanet(planetID int) {
+	if m.player == nil {
 		return
+	}
+	tier := game.DroneTier(m.player.DroneTier)
+	faction := game.Faction(m.player.Faction)
+	m.engine.DeployChair(planetID, m.session.SSHKey, m.callsign, m.player.ChairLevel, tier, faction)
+	m.activePlanetID = planetID
+	m.state = StateDefense
+	m.chatVisible = true
+
+	// Join planet chat
+	snap := m.engine.GetGalaxySnapshot()
+	if snap != nil && planetID < len(snap.Planets) {
+		chKey := chat.PlanetChannelKey(snap.Planets[planetID].Name)
+		m.chatHub.Incoming <- chat.ChatEvent{
+			Type:        chat.EventJoinChannel,
+			Fingerprint: m.session.SSHKey,
+			Channel:     chKey,
+		}
+	}
+}
+
+func (m *Model) setTactic(tactic game.DroneTactic) {
+	if m.activePlanetID >= 0 {
+		m.engine.SetChairTactic(m.activePlanetID, m.session.SSHKey, tactic)
+	}
+}
+
+func (m *Model) retreatFromPlanet() {
+	if m.activePlanetID >= 0 {
+		// Save earned ZPM before retreating (you keep what you killed)
+		if m.defenseSnap != nil && m.defenseSnap.ZPMEarned > 0 {
+			m.store.AddZPM(m.session.SSHKey, m.defenseSnap.ZPMEarned)
+			m.store.AddKills(m.session.SSHKey, m.defenseSnap.TotalKills)
+			m.loadPlayer()
+		}
+		m.engine.RetreatChair(m.activePlanetID, m.session.SSHKey)
+		m.activePlanetID = -1
+		m.defenseSnap = nil
+	}
+}
+
+func (m *Model) handleDefenseEnd(snap *engine.DefenseSnapshot) {
+	if snap.Liberated {
+		// Award kill ZPM + bounty
+		totalZPM := snap.ZPMEarned + snap.BountyZPM
+		m.store.AddZPM(m.session.SSHKey, totalZPM)
+		m.store.RecordPlanetFreed(m.session.SSHKey)
+		m.store.AddKills(m.session.SSHKey, snap.TotalKills)
+	} else {
+		// Still award some ZPM for the effort
+		m.store.AddZPM(m.session.SSHKey, snap.ZPMEarned/2)
+		m.store.AddKills(m.session.SSHKey, snap.TotalKills)
+	}
+	m.loadPlayer() // refresh stats
+	m.activePlanetID = -1
+}
+
+func (m *Model) cleanup() {
+	if m.activePlanetID >= 0 {
+		// Save earned ZPM before disconnecting
+		if m.defenseSnap != nil && m.defenseSnap.ZPMEarned > 0 {
+			m.store.AddZPM(m.session.SSHKey, m.defenseSnap.ZPMEarned)
+			m.store.AddKills(m.session.SSHKey, m.defenseSnap.TotalKills)
+		}
+		m.engine.RetreatChair(m.activePlanetID, m.session.SSHKey)
 	}
 	m.chatHub.Incoming <- chat.ChatEvent{
 		Type:        chat.EventDisconnect,
@@ -885,108 +496,21 @@ func (m *Model) chatDisconnect() {
 	}
 }
 
-// toggleChat cycles chat panel: Hidden → Compact → Expanded → Hidden.
-// Entering Compact or Expanded sets focus to Chat.
-func (m *Model) toggleChat() {
-	switch m.chatPanel {
-	case views.ChatHidden:
-		m.chatPanel = views.ChatCompact
-		m.chatFocus = FocusChat
-	case views.ChatCompact:
-		m.chatPanel = views.ChatExpanded
-		m.chatFocus = FocusChat
-	case views.ChatExpanded:
-		m.chatPanel = views.ChatHidden
-		m.chatFocus = FocusGame
-		m.chatInput = ""
+// View renders the current state.
+func (m *Model) View() string {
+	switch m.state {
+	case StateSplash:
+		return views.RenderSplash(m.splash, m.width, m.height)
+	case StateCallsign:
+		return views.RenderCallsign(m.callsign, m.frameCount, m.width, m.height)
+	case StateAtlantis:
+		return views.RenderAtlantis(m.player, m.callsign, m.chatMessages, m.chatInput, m.chatMode, m.engine.OnlinePlayerCount(), m.width, m.height)
+	case StateThrone:
+		return views.RenderThrone(m.player, m.throne, m.frameCount, m.width, m.height)
+	case StateGalaxy:
+		return views.RenderGalaxy(m.galaxy, m.width, m.height)
+	case StateDefense:
+		return views.RenderDefense(m.defenseSnap, m.chatMessages, m.chatInput, m.chatMode, m.chatVisible, m.frameCount, m.session.SSHKey, m.width, m.height)
 	}
-}
-
-// updateChatInput handles keypresses when chat has focus.
-func (m *Model) updateChatInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.chatFocus = FocusGame
-		m.chatPanel = views.ChatHidden
-		m.chatInput = ""
-	case "enter":
-		m.sendChatMessage()
-	case "backspace":
-		if len(m.chatInput) > 0 {
-			m.chatInput = m.chatInput[:len(m.chatInput)-1]
-		}
-	case "tab":
-		// Switch focus back to game without closing panel
-		m.chatFocus = FocusGame
-	case "c":
-		// If input is empty, 'c' toggles chat off
-		if m.chatInput == "" {
-			m.toggleChat()
-			return m, nil
-		}
-		m.chatInput += "c"
-	default:
-		r := msg.String()
-		if len(r) == 1 && len(m.chatInput) < 500 {
-			m.chatInput += r
-		}
-	}
-	return m, nil
-}
-
-// sendChatMessage sends the current input to the chat hub.
-func (m *Model) sendChatMessage() {
-	text := strings.TrimSpace(m.chatInput)
-	m.chatInput = ""
-	if text == "" || m.chatHub == nil {
-		return
-	}
-
-	// Handle slash commands
-	if text[0] == '/' {
-		parts := strings.SplitN(text[1:], " ", 2)
-		cmd := parts[0]
-		args := ""
-		if len(parts) > 1 {
-			args = parts[1]
-		}
-		m.chatHub.Incoming <- chat.ChatEvent{
-			Type:        chat.EventSlashCommand,
-			Fingerprint: m.session.SSHKey,
-			Command:     cmd,
-			Args:        args,
-		}
-		return
-	}
-
-	// Handle @DM shorthand
-	if text[0] == '@' {
-		m.chatHub.Incoming <- chat.ChatEvent{
-			Type:        chat.EventSendMessage,
-			Fingerprint: m.session.SSHKey,
-			Body:        text,
-		}
-		return
-	}
-
-	// Regular message
-	m.chatHub.Incoming <- chat.ChatEvent{
-		Type:        chat.EventSendMessage,
-		Fingerprint: m.session.SSHKey,
-		Body:        text,
-	}
-}
-
-// buildPlayerList creates PlayerListEntry slice from the current planet snapshot.
-func (m *Model) buildPlayerList(snap *simulation.PlanetSnapshot) []views.PlayerListEntry {
-	var entries []views.PlayerListEntry
-	for _, p := range snap.Players {
-		entry := views.PlayerListEntry{
-			Callsign: p.CallSign,
-			Level:    0, // level not in PlayerSnapshot, just show online
-			Location: snap.PlanetName,
-		}
-		entries = append(entries, entry)
-	}
-	return entries
+	return ""
 }

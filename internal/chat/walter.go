@@ -37,51 +37,30 @@ func GameEventToWalter(ev GameEvent) []ChatMessage {
 	switch ev.Type {
 	case GamePlayerConnect:
 		msgs = append(msgs, WalterMsg("ops",
-			ev.Callsign+" has reported for duty."))
+			ev.Callsign+" has connected to Atlantis."))
 
 	case GamePlayerDisconnect:
 		msgs = append(msgs, WalterMsg("ops",
 			ev.Callsign+" has signed off."))
 
-	case GameGateDial:
-		if ev.PlanetSeed != "" {
-			ch := LocalChannelKey(ev.PlanetSeed)
-			msgs = append(msgs,
-				WalterMsg(ch, "Chevron 1... encoded."),
-				WalterMsg(ch, "Chevron 2... encoded."),
-				WalterMsg(ch, "Chevron 3... encoded."),
-				WalterMsg(ch, "Chevron 4... encoded."),
-				WalterMsg(ch, "Chevron 5... encoded."),
-				WalterMsg(ch, "Chevron 6... encoded."),
-				WalterMsg(ch, "Chevron 7... locked!"),
-			)
-		}
-
-	case GamePlayerArrived:
-		if ev.PlanetSeed != "" {
-			ch := LocalChannelKey(ev.PlanetSeed)
-			msgs = append(msgs, WalterMsg(ch,
-				"Incoming traveler — "+ev.Callsign+"."))
-		}
-
-	case GamePlayerDeparted:
-		if ev.PlanetSeed != "" {
-			ch := LocalChannelKey(ev.PlanetSeed)
-			msgs = append(msgs, WalterMsg(ch,
-				ev.Callsign+" has departed through the gate."))
-		}
-
-	case GamePlayerKilled:
+	case GamePlayerDeploy:
 		msgs = append(msgs, WalterMsg("ops",
-			"We've lost "+ev.Callsign+"'s signal on "+ev.PlanetName+"."))
+			ev.Callsign+" deployed a control chair on "+ev.PlanetName+"."))
+		ch := PlanetChannelKey(ev.PlanetName)
+		msgs = append(msgs, WalterMsg(ch,
+			"Chair deployed — "+ev.Callsign+" is online."))
 
-	case GamePlayerLevelUp:
+	case GamePlayerRetreat:
 		msgs = append(msgs, WalterMsg("ops",
-			ev.Callsign+" has been promoted to Level "+ev.Extra+"."))
+			ev.Callsign+" retreated from "+ev.PlanetName+"."))
 
-	case GameEnemyBossKilled:
+	case GamePlanetLiberated:
+		msgs = append(msgs, WalterAnnounce(
+			">>> PLANET "+ev.PlanetName+" HAS BEEN LIBERATED! <<<"))
+
+	case GamePlanetFailed:
 		msgs = append(msgs, WalterMsg("ops",
-			ev.Callsign+" has defeated "+ev.Extra+" on "+ev.PlanetName+"!"))
+			"Defense of "+ev.PlanetName+" has failed. The replicators hold."))
 
 	case GameTeamCreated:
 		msgs = append(msgs, WalterMsg("ops",
@@ -90,26 +69,44 @@ func GameEventToWalter(ev GameEvent) []ChatMessage {
 	case GameTeamDisbanded:
 		msgs = append(msgs, WalterMsg("ops",
 			"SG team \""+ev.Extra+"\" has been disbanded."))
+
+	case GameSurgeStart:
+		msgs = append(msgs, WalterAnnounce(
+			"⚠ REPLICATOR SURGE on "+ev.PlanetName+"! Double spawns — double ZPM rewards!"))
+
+	case GameSurgeEnd:
+		msgs = append(msgs, WalterMsg("ops",
+			"Replicator surge on "+ev.PlanetName+" has subsided."))
+
+	case GameMilestone:
+		msgs = append(msgs, WalterAnnounce(
+			">>> "+ev.Extra+" <<<"))
+
+	case GameGalaxyReset:
+		msgs = append(msgs, WalterAnnounce(
+			">>> GALAXY LIBERATED — NEW THREAT CYCLE BEGINS! <<<"))
+		msgs = append(msgs, WalterMsg("ops",
+			"The replicators have adapted. All planets are under new invasion. Difficulty increased."))
 	}
 
 	return msgs
 }
 
-// MOTD returns the message-of-the-day art for the ops channel.
+// MOTD returns the message-of-the-day for the ops channel.
 func MOTD() string {
-	return `    ╔══════════════════════════════════════════════╗
-    ║     _____ _____  _____                       ║
-    ║    / ____|/ ____||  __ \                      ║
-    ║   | (___ | |  __ | |    |                     ║
-    ║    \___ \| | |_ || |    |                     ║
-    ║    ____) | |__| || |____|                     ║
-    ║   |_____/ \_____||______|  COMMS ONLINE       ║
-    ║                                              ║
-    ║   Stargate Command — Secure Channel          ║
-    ║   CHEYENNE MOUNTAIN COMPLEX                  ║
-    ║   Classification: TOP SECRET / SCI           ║
-    ║                                              ║
-    ║   Type /help for commands                    ║
-    ║   Type /tune #channel to switch frequency    ║
-    ╚══════════════════════════════════════════════╝`
+	return `    ╔═══════════════════════════════════════════════╗
+    ║       ___ _____ ___   _      ___   ___  ___  ║
+    ║      / __|_   _| __| | |    | \ \ / / |/ __| ║
+    ║     | (_ | | | | _|  | | /| | |\ V /| |\__ \ ║
+    ║      \___| |_| |___| |_|/ |_|  |_|  |_||___/ ║
+    ║                                               ║
+    ║   ATLANTIS COMMAND — COMMS ONLINE             ║
+    ║   ANCIENT DEFENSE NETWORK ACTIVE              ║
+    ║                                               ║
+    ║   The replicators are invading.               ║
+    ║   Deploy your chair. Launch your drones.      ║
+    ║   Hold the galaxy.                            ║
+    ║                                               ║
+    ║   Type /help for commands                     ║
+    ╚═══════════════════════════════════════════════╝`
 }

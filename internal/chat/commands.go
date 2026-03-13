@@ -37,12 +37,9 @@ func (h *Hub) handleSlashCommand(ev ChatEvent) {
 	case "motd":
 		h.sendToSession(sess, WalterMsg("ops", MOTD()))
 	case "clear":
-		// Handled client-side — just acknowledge
 		h.sendToSession(sess, WalterMsg("", "Chat cleared."))
 	case "team":
 		h.cmdTeam(sess, args)
-	case "iris":
-		h.cmdIris(sess, args)
 	case "indeed":
 		h.cmdFunEmote(sess, " raises an eyebrow. \"Indeed.\"")
 	case "kree":
@@ -61,7 +58,7 @@ func (h *Hub) handleSlashCommand(ev ChatEvent) {
 func (h *Hub) cmdHelp(sess *ChatSession) {
 	help := `Commands:
   /help              Show this list
-  /tune <channel>    Switch active channel (#ops, #local, #sg-name)
+  /tune <channel>    Switch active channel (#ops, #planet, #sg-name)
   /roster            List all online players
   /who               List players on current channel
   /callsign <name>   Change your display name
@@ -77,36 +74,33 @@ func (h *Hub) cmdHelp(sess *ChatSession) {
   /team kick <n>     Kick member (leader only)
   /team disband      Disband team (leader only)
   /indeed            "Indeed."
-  /kree              "KREE!"
-  /shol'va <name>    "SHOL'VA!"`
+  /kree              "KREE!"`
 	h.sendToSession(sess, WalterMsg("", help))
 }
 
 func (h *Hub) cmdTune(sess *ChatSession, args string) {
 	if args == "" {
-		h.sendToSession(sess, WalterMsg("", "Usage: /tune <channel> (e.g. #ops, #local, #sg-myteam)"))
+		h.sendToSession(sess, WalterMsg("", "Usage: /tune <channel> (e.g. #ops, #planet, #sg-myteam)"))
 		return
 	}
 
-	// Normalize channel name
-	target := args
-	target = strings.TrimPrefix(target, "#")
-	if target == "ops" || target == "local" {
-		// Check subscriptions
-		for chKey := range sess.Subscriptions {
-			if target == "ops" && chKey == "ops" {
-				sess.ActiveChannel = "ops"
-				h.sendToSession(sess, WalterMsg("", "Tuned to #ops."))
-				return
-			}
-			if target == "local" && strings.HasPrefix(chKey, "local:") {
-				sess.ActiveChannel = chKey
-				h.sendToSession(sess, WalterMsg("", "Tuned to #local."))
-				return
-			}
+	target := strings.TrimPrefix(args, "#")
+
+	if target == "ops" {
+		if sess.Subscriptions["ops"] {
+			sess.ActiveChannel = "ops"
+			h.sendToSession(sess, WalterMsg("", "Tuned to #ops."))
 		}
-		h.sendToSession(sess, WalterMsg("", "Channel not available."))
 		return
+	}
+
+	// Planet channel
+	for chKey := range sess.Subscriptions {
+		if strings.HasPrefix(chKey, "planet:") && (target == "planet" || target == chKey[7:]) {
+			sess.ActiveChannel = chKey
+			h.sendToSession(sess, WalterMsg("", "Tuned to "+ChannelDisplayName(chKey)+"."))
+			return
+		}
 	}
 
 	// Team channel
@@ -162,7 +156,6 @@ func (h *Hub) cmdCallsign(sess *ChatSession, args string) {
 		return
 	}
 
-	// Validate chars
 	for _, c := range name {
 		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '\'') {
 			h.sendToSession(sess, WalterMsg("", "Callsign can only contain letters, numbers, _, -, '"))
@@ -170,17 +163,14 @@ func (h *Hub) cmdCallsign(sess *ChatSession, args string) {
 		}
 	}
 
-	// Check reserved names
 	lower := strings.ToLower(name)
 	if lower == "walter" || lower == "system" || lower == "admin" {
 		h.sendToSession(sess, WalterMsg("", "That callsign is reserved."))
 		return
 	}
 
-	// Check uniqueness
 	taken, err := h.store.IsCallsignTaken(name)
 	if err == nil && taken {
-		// Check if it's our own
 		existing, _ := h.store.GetCallsign(sess.Fingerprint)
 		if strings.ToLower(existing) != lower {
 			h.sendToSession(sess, WalterMsg("", "That callsign is already taken."))
@@ -192,7 +182,6 @@ func (h *Hub) cmdCallsign(sess *ChatSession, args string) {
 	sess.Callsign = name
 	h.store.SetCallsign(sess.Fingerprint, name)
 
-	// Broadcast name change
 	h.fanout(h.channels["ops"], WalterMsg("ops",
 		old+" is now known as "+name+"."))
 }
@@ -201,19 +190,14 @@ func (h *Hub) cmdEmote(sess *ChatSession, args string) {
 	if args == "" {
 		return
 	}
-
 	ch, ok := h.channels[sess.ActiveChannel]
 	if !ok {
 		return
 	}
-
 	msg := ChatMessage{
-		Channel:        sess.ActiveChannel,
-		SenderFP:       sess.Fingerprint,
-		SenderCallsign: sess.Callsign,
-		Kind:           MsgEmote,
-		Body:           "* " + sess.Callsign + " " + args,
-		Timestamp:      time.Now(),
+		Channel: sess.ActiveChannel, SenderFP: sess.Fingerprint,
+		SenderCallsign: sess.Callsign, Kind: MsgEmote,
+		Body: "* " + sess.Callsign + " " + args, Timestamp: time.Now(),
 	}
 	ch.Backlog.Push(msg)
 	h.fanout(ch, msg)
@@ -224,14 +208,10 @@ func (h *Hub) cmdFunEmote(sess *ChatSession, action string) {
 	if !ok {
 		return
 	}
-
 	msg := ChatMessage{
-		Channel:        sess.ActiveChannel,
-		SenderFP:       sess.Fingerprint,
-		SenderCallsign: sess.Callsign,
-		Kind:           MsgEmote,
-		Body:           "* " + sess.Callsign + action,
-		Timestamp:      time.Now(),
+		Channel: sess.ActiveChannel, SenderFP: sess.Fingerprint,
+		SenderCallsign: sess.Callsign, Kind: MsgEmote,
+		Body: "* " + sess.Callsign + action, Timestamp: time.Now(),
 	}
 	ch.Backlog.Push(msg)
 	h.fanout(ch, msg)
@@ -242,13 +222,11 @@ func (h *Hub) cmdMute(sess *ChatSession, args string) {
 		h.sendToSession(sess, WalterMsg("", "Usage: /mute <callsign>"))
 		return
 	}
-
 	fp, err := h.store.LookupFingerprint(args)
 	if err != nil || fp == "" {
 		h.sendToSession(sess, WalterMsg("", "Player not found: "+args))
 		return
 	}
-
 	sess.MuteList[fp] = true
 	h.store.AddMute(sess.Fingerprint, fp)
 	h.sendToSession(sess, WalterMsg("", "Muted "+args+"."))
@@ -259,27 +237,14 @@ func (h *Hub) cmdUnmute(sess *ChatSession, args string) {
 		h.sendToSession(sess, WalterMsg("", "Usage: /unmute <callsign>"))
 		return
 	}
-
 	fp, err := h.store.LookupFingerprint(args)
 	if err != nil || fp == "" {
 		h.sendToSession(sess, WalterMsg("", "Player not found: "+args))
 		return
 	}
-
 	delete(sess.MuteList, fp)
 	h.store.RemoveMute(sess.Fingerprint, fp)
 	h.sendToSession(sess, WalterMsg("", "Unmuted "+args+"."))
-}
-
-func (h *Hub) cmdIris(sess *ChatSession, args string) {
-	switch strings.ToLower(args) {
-	case "open":
-		h.fanout(h.channels["ops"], WalterMsg("ops", sess.Callsign+" ordered: IRIS OPEN."))
-	case "close":
-		h.fanout(h.channels["ops"], WalterMsg("ops", sess.Callsign+" ordered: IRIS CLOSED."))
-	default:
-		h.sendToSession(sess, WalterMsg("", "Usage: /iris open|close"))
-	}
 }
 
 func (h *Hub) cmdTeam(sess *ChatSession, args string) {
@@ -311,26 +276,19 @@ func (h *Hub) teamCreate(sess *ChatSession, name string) {
 		h.sendToSession(sess, WalterMsg("", "Usage: /team create <name>"))
 		return
 	}
-
-	// Check if already in a team
 	existing, _ := h.store.GetTeamByPlayer(sess.Fingerprint)
 	if existing != nil {
 		h.sendToSession(sess, WalterMsg("", "You are already on team "+existing.Name+". Leave first."))
 		return
 	}
-
-	teamID, err := h.store.CreateTeam(name, sess.Fingerprint)
+	_, err := h.store.CreateTeam(name, sess.Fingerprint)
 	if err != nil {
 		h.sendToSession(sess, WalterMsg("", "Team name already taken or invalid."))
 		return
 	}
-
-	// Create team channel
 	chKey := TeamChannelKey(name)
 	h.channels[chKey] = NewChannel(chKey, ChanTeam, 100)
 	h.subscribe(sess, chKey)
-
-	_ = teamID
 	h.fanout(h.channels["ops"], WalterMsg("ops",
 		"SG team \""+name+"\" has been formed by "+sess.Callsign+"."))
 }
@@ -340,7 +298,6 @@ func (h *Hub) teamInvite(sess *ChatSession, callsign string) {
 		h.sendToSession(sess, WalterMsg("", "Usage: /team invite <callsign>"))
 		return
 	}
-
 	team, _ := h.store.GetTeamByPlayer(sess.Fingerprint)
 	if team == nil {
 		h.sendToSession(sess, WalterMsg("", "You are not on a team."))
@@ -350,30 +307,22 @@ func (h *Hub) teamInvite(sess *ChatSession, callsign string) {
 		h.sendToSession(sess, WalterMsg("", "Only the team leader can invite."))
 		return
 	}
-
-	// Find target
 	targetFP, _ := h.store.LookupFingerprint(callsign)
 	if targetFP == "" {
 		h.sendToSession(sess, WalterMsg("", "Player not found: "+callsign))
 		return
 	}
-
-	// Check team size
 	members, _ := h.store.GetTeamMembers(team.ID)
 	if len(members) >= 4 {
 		h.sendToSession(sess, WalterMsg("", "Team is full (max 4 members)."))
 		return
 	}
-
 	h.store.AddTeamMember(team.ID, targetFP)
-
-	// Subscribe target if online
 	if target, ok := h.sessions[targetFP]; ok {
 		chKey := TeamChannelKey(team.Name)
 		h.subscribe(target, chKey)
 		h.sendToSession(target, WalterMsg("", "You have been added to SG team \""+team.Name+"\"."))
 	}
-
 	h.sendToSession(sess, WalterMsg("", callsign+" has been added to the team."))
 }
 
@@ -383,7 +332,6 @@ func (h *Hub) teamLeave(sess *ChatSession) {
 		h.sendToSession(sess, WalterMsg("", "You are not on a team."))
 		return
 	}
-
 	h.store.RemoveTeamMember(team.ID, sess.Fingerprint)
 	chKey := TeamChannelKey(team.Name)
 	h.unsubscribe(sess, chKey)
@@ -395,27 +343,22 @@ func (h *Hub) teamKick(sess *ChatSession, callsign string) {
 		h.sendToSession(sess, WalterMsg("", "Usage: /team kick <callsign>"))
 		return
 	}
-
 	team, _ := h.store.GetTeamByPlayer(sess.Fingerprint)
 	if team == nil || team.LeaderFP != sess.Fingerprint {
 		h.sendToSession(sess, WalterMsg("", "Only the team leader can kick members."))
 		return
 	}
-
 	targetFP, _ := h.store.LookupFingerprint(callsign)
 	if targetFP == "" {
 		h.sendToSession(sess, WalterMsg("", "Player not found: "+callsign))
 		return
 	}
-
 	h.store.RemoveTeamMember(team.ID, targetFP)
-
 	if target, ok := h.sessions[targetFP]; ok {
 		chKey := TeamChannelKey(team.Name)
 		h.unsubscribe(target, chKey)
 		h.sendToSession(target, WalterMsg("", "You have been removed from SG team \""+team.Name+"\"."))
 	}
-
 	h.sendToSession(sess, WalterMsg("", callsign+" has been kicked from the team."))
 }
 
@@ -425,8 +368,6 @@ func (h *Hub) teamDisband(sess *ChatSession) {
 		h.sendToSession(sess, WalterMsg("", "Only the team leader can disband."))
 		return
 	}
-
-	// Remove all members from channel
 	chKey := TeamChannelKey(team.Name)
 	if ch, ok := h.channels[chKey]; ok {
 		for fp := range ch.Members {
@@ -436,7 +377,6 @@ func (h *Hub) teamDisband(sess *ChatSession) {
 		}
 		delete(h.channels, chKey)
 	}
-
 	h.store.DisbandTeam(team.ID)
 	h.fanout(h.channels["ops"], WalterMsg("ops",
 		"SG team \""+team.Name+"\" has been disbanded."))

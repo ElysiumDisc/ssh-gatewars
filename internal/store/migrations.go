@@ -3,57 +3,32 @@ package store
 import "database/sql"
 
 var migrations = []string{
-	// 0: players table
+	// 0: players table — persistent identity + progression
 	`CREATE TABLE IF NOT EXISTS players (
 		ssh_fingerprint TEXT PRIMARY KEY,
 		display_name TEXT NOT NULL DEFAULT '',
 		call_sign TEXT NOT NULL DEFAULT '',
+		zpm_balance INTEGER NOT NULL DEFAULT 0,
+		chair_level INTEGER NOT NULL DEFAULT 1,
+		drone_tier INTEGER NOT NULL DEFAULT 0,
+		planets_freed INTEGER NOT NULL DEFAULT 0,
+		total_kills INTEGER NOT NULL DEFAULT 0,
 		total_sessions INTEGER NOT NULL DEFAULT 0,
 		first_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		last_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	)`,
 
-	// 1: characters table
-	`CREATE TABLE IF NOT EXISTS characters (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		ssh_fingerprint TEXT NOT NULL REFERENCES players(ssh_fingerprint),
-		hp INTEGER NOT NULL DEFAULT 20,
-		max_hp INTEGER NOT NULL DEFAULT 20,
-		level INTEGER NOT NULL DEFAULT 1,
-		xp INTEGER NOT NULL DEFAULT 0,
-		missions_completed INTEGER NOT NULL DEFAULT 0,
-		deaths INTEGER NOT NULL DEFAULT 0,
-		location TEXT NOT NULL DEFAULT 'sgc',
-		pos_x INTEGER NOT NULL DEFAULT 7,
-		pos_y INTEGER NOT NULL DEFAULT 4,
-		weapon_id TEXT NOT NULL DEFAULT '',
-		armor_id TEXT NOT NULL DEFAULT '',
-		accessory_id TEXT NOT NULL DEFAULT '',
-		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	// 1: galaxy_planets — shared galaxy state
+	`CREATE TABLE IF NOT EXISTS galaxy_planets (
+		id INTEGER PRIMARY KEY,
+		name TEXT NOT NULL,
+		seed INTEGER NOT NULL,
+		status INTEGER NOT NULL DEFAULT 0,
+		invasion_level INTEGER NOT NULL DEFAULT 1,
+		freed_at DATETIME
 	)`,
 
-	// 2: inventory
-	`CREATE TABLE IF NOT EXISTS inventory (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		character_id INTEGER NOT NULL REFERENCES characters(id),
-		item_id TEXT NOT NULL,
-		quantity INTEGER NOT NULL DEFAULT 1
-	)`,
-
-	// 3: discovered gate addresses
-	`CREATE TABLE IF NOT EXISTS discovered_addresses (
-		character_id INTEGER NOT NULL REFERENCES characters(id),
-		address TEXT NOT NULL,
-		discovered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		PRIMARY KEY (character_id, address)
-	)`,
-
-	// 4: schema version
-	`CREATE TABLE IF NOT EXISTS schema_version (
-		version INTEGER NOT NULL
-	)`,
-
-	// 5: chat messages
+	// 2: chat messages
 	`CREATE TABLE IF NOT EXISTS chat_messages (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		channel TEXT NOT NULL,
@@ -65,7 +40,7 @@ var migrations = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_chat_channel_time ON chat_messages(channel, created_at)`,
 
-	// 6: teams
+	// 3: teams
 	`CREATE TABLE IF NOT EXISTS teams (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL UNIQUE,
@@ -73,7 +48,7 @@ var migrations = []string{
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	)`,
 
-	// 7: team members
+	// 4: team members
 	`CREATE TABLE IF NOT EXISTS team_members (
 		team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
 		player_fp TEXT NOT NULL,
@@ -81,26 +56,61 @@ var migrations = []string{
 		PRIMARY KEY (team_id, player_fp)
 	)`,
 
-	// 8: callsigns (unique mapping)
+	// 5: callsigns (unique mapping)
 	`CREATE TABLE IF NOT EXISTS callsigns (
 		fingerprint TEXT PRIMARY KEY,
 		callsign TEXT NOT NULL,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	)`,
 
-	// 9: mutes
+	// 6: mutes
 	`CREATE TABLE IF NOT EXISTS mutes (
 		muter_fp TEXT NOT NULL,
 		muted_fp TEXT NOT NULL,
 		PRIMARY KEY (muter_fp, muted_fp)
 	)`,
+
+	// 7: schema version
+	`CREATE TABLE IF NOT EXISTS schema_version (
+		version INTEGER NOT NULL
+	)`,
+
+	// 8: faction column on players (0=Ancient, 1=Ori)
+	`ALTER TABLE players ADD COLUMN faction INTEGER NOT NULL DEFAULT 0`,
 }
 
 func runMigrations(db *sql.DB) error {
 	for _, m := range migrations {
-		if _, err := db.Exec(m); err != nil {
+		_, err := db.Exec(m)
+		if err != nil {
+			// ALTER TABLE fails if column exists — ignore safely
+			if isAlterColumnExists(err) {
+				continue
+			}
 			return err
 		}
 	}
 	return nil
+}
+
+func isAlterColumnExists(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// SQLite error when column already exists
+	return len(msg) > 0 && (contains(msg, "duplicate column") || contains(msg, "already exists"))
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && searchStr(s, substr)
+}
+
+func searchStr(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }

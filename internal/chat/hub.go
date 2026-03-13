@@ -77,7 +77,6 @@ func (h *Hub) handleEvent(ev ChatEvent) {
 }
 
 func (h *Hub) handleConnect(ev ChatEvent) {
-	// Load mutes from DB
 	var mutes map[string]bool
 	if muteFPs, err := h.store.GetMutes(ev.Fingerprint); err == nil {
 		mutes = make(map[string]bool, len(muteFPs))
@@ -121,15 +120,10 @@ func (h *Hub) handleDisconnect(ev ChatEvent) {
 		return
 	}
 
-	// Remove from all channels
 	for chKey := range sess.Subscriptions {
 		if ch, ok := h.channels[chKey]; ok {
 			delete(ch.Members, ev.Fingerprint)
-			// Clean up empty non-permanent channels
-			if ch.Type == ChanLocal && len(ch.Members) == 0 {
-				delete(h.channels, chKey)
-			}
-			if ch.Type == ChanDM && len(ch.Members) == 0 {
+			if (ch.Type == ChanLocal || ch.Type == ChanDM) && len(ch.Members) == 0 {
 				delete(h.channels, chKey)
 			}
 		}
@@ -158,11 +152,10 @@ func (h *Hub) handleSendMessage(ev ChatEvent) {
 	}
 	sess.msgCount++
 	if sess.msgCount > 5 {
-		h.sendToSession(sess, WalterMsg("", "Slow down, soldier. Radio discipline."))
+		h.sendToSession(sess, WalterMsg("", "Slow down. Radio discipline."))
 		return
 	}
 
-	// Validate channel membership
 	ch, ok := h.channels[channel]
 	if !ok {
 		h.sendToSession(sess, WalterMsg("", "Channel not found."))
@@ -173,7 +166,6 @@ func (h *Hub) handleSendMessage(ev ChatEvent) {
 		return
 	}
 
-	// Create message
 	msg := ChatMessage{
 		Channel:        channel,
 		SenderFP:       ev.Fingerprint,
@@ -201,15 +193,11 @@ func (h *Hub) handleSendMessage(ev ChatEvent) {
 		})
 	}
 
-	// Push to channel backlog
 	ch.Backlog.Push(msg)
-
-	// Fanout to all members
 	h.fanout(ch, msg)
 }
 
 func (h *Hub) handleDM(sender *ChatSession, body string) {
-	// Parse @callsign message
 	parts := splitFirst(body[1:], ' ')
 	targetCallsign := parts[0]
 	dmBody := ""
@@ -221,7 +209,6 @@ func (h *Hub) handleDM(sender *ChatSession, body string) {
 		return
 	}
 
-	// Find target
 	var target *ChatSession
 	for _, s := range h.sessions {
 		if s.Callsign == targetCallsign {
@@ -237,29 +224,19 @@ func (h *Hub) handleDM(sender *ChatSession, body string) {
 	now := time.Now()
 	dmKey := DMChannelKey(sender.Fingerprint, target.Fingerprint)
 
-	// Ensure DM channel exists
 	if _, ok := h.channels[dmKey]; !ok {
 		h.channels[dmKey] = NewChannel(dmKey, ChanDM, 0)
 	}
 
-	// Send to recipient
 	h.sendToSession(target, ChatMessage{
-		Channel:        dmKey,
-		SenderFP:       sender.Fingerprint,
-		SenderCallsign: sender.Callsign,
-		Kind:           MsgWhisper,
-		Body:           dmBody,
-		Timestamp:      now,
+		Channel: dmKey, SenderFP: sender.Fingerprint,
+		SenderCallsign: sender.Callsign, Kind: MsgWhisper,
+		Body: dmBody, Timestamp: now,
 	})
-
-	// Echo to sender
 	h.sendToSession(sender, ChatMessage{
-		Channel:        dmKey,
-		SenderFP:       sender.Fingerprint,
-		SenderCallsign: "-> " + target.Callsign,
-		Kind:           MsgWhisper,
-		Body:           dmBody,
-		Timestamp:      now,
+		Channel: dmKey, SenderFP: sender.Fingerprint,
+		SenderCallsign: "-> " + target.Callsign, Kind: MsgWhisper,
+		Body: dmBody, Timestamp: now,
 	})
 }
 
@@ -284,8 +261,7 @@ func (h *Hub) handleGameEvent(gev GameEvent) {
 	for _, msg := range msgs {
 		ch, ok := h.channels[msg.Channel]
 		if !ok {
-			// Create local channel on demand
-			if msg.Channel != "" && len(msg.Channel) > 6 && msg.Channel[:6] == "local:" {
+			if msg.Channel != "" && len(msg.Channel) > 7 && msg.Channel[:7] == "planet:" {
 				ch = NewChannel(msg.Channel, ChanLocal, 50)
 				h.channels[msg.Channel] = ch
 			} else if msg.Channel == "ops" {
@@ -297,7 +273,6 @@ func (h *Hub) handleGameEvent(gev GameEvent) {
 
 		ch.Backlog.Push(msg)
 
-		// Persist ops messages
 		if ch.Type == ChanOps {
 			h.store.SaveChatMessage(store.ChatMsg{
 				Channel:        msg.Channel,
@@ -313,12 +288,10 @@ func (h *Hub) handleGameEvent(gev GameEvent) {
 	}
 }
 
-// subscribe adds a session to a channel and delivers backlog.
 func (h *Hub) subscribe(sess *ChatSession, channelKey string) {
 	ch, ok := h.channels[channelKey]
 	if !ok {
-		// Auto-create local channels
-		if len(channelKey) > 6 && channelKey[:6] == "local:" {
+		if len(channelKey) > 7 && channelKey[:7] == "planet:" {
 			ch = NewChannel(channelKey, ChanLocal, 50)
 			h.channels[channelKey] = ch
 		} else {
@@ -329,31 +302,26 @@ func (h *Hub) subscribe(sess *ChatSession, channelKey string) {
 	ch.Members[sess.Fingerprint] = true
 	sess.Subscriptions[channelKey] = true
 
-	// Deliver backlog
 	for _, msg := range ch.Backlog.All() {
 		msg.IsBacklog = true
 		h.sendToSession(sess, msg)
 	}
 }
 
-// unsubscribe removes a session from a channel.
 func (h *Hub) unsubscribe(sess *ChatSession, channelKey string) {
 	if ch, ok := h.channels[channelKey]; ok {
 		delete(ch.Members, sess.Fingerprint)
 	}
 	delete(sess.Subscriptions, channelKey)
 
-	// If active channel was this one, switch to ops
 	if sess.ActiveChannel == channelKey {
 		sess.ActiveChannel = "ops"
 	}
 }
 
-// fanout delivers a message to all members of a channel.
 func (h *Hub) fanout(ch *Channel, msg ChatMessage) {
 	for fp := range ch.Members {
 		if sess, ok := h.sessions[fp]; ok {
-			// Skip if sender is muted by recipient
 			if msg.SenderFP != "system" && sess.MuteList[msg.SenderFP] {
 				continue
 			}
@@ -362,12 +330,10 @@ func (h *Hub) fanout(ch *Channel, msg ChatMessage) {
 	}
 }
 
-// sendToSession sends a message to a session's outbox (non-blocking).
 func (h *Hub) sendToSession(sess *ChatSession, msg ChatMessage) {
 	select {
 	case sess.Outbox <- msg:
 	default:
-		// Outbox full — drop oldest by reading one then retrying
 		select {
 		case <-sess.Outbox:
 		default:
@@ -379,21 +345,10 @@ func (h *Hub) sendToSession(sess *ChatSession, msg ChatMessage) {
 	}
 }
 
-// EnsureLocalChannel creates or returns a local channel for a planet.
-func (h *Hub) EnsureLocalChannel(planetSeed string) {
-	key := LocalChannelKey(planetSeed)
-	h.Incoming <- ChatEvent{
-		Type:    EventJoinChannel,
-		Channel: key,
-	}
-}
-
-// GetSession returns the callsign for a fingerprint (for commands).
 func (h *Hub) getSession(fp string) *ChatSession {
 	return h.sessions[fp]
 }
 
-// GetAllOnline returns all online callsigns with their fingerprints.
 func (h *Hub) getAllOnline() map[string]string {
 	result := make(map[string]string, len(h.sessions))
 	for fp, sess := range h.sessions {
@@ -402,19 +357,17 @@ func (h *Hub) getAllOnline() map[string]string {
 	return result
 }
 
-// sanitizeMessage cleans a message body.
 func sanitizeMessage(s string) string {
 	if len(s) > 500 {
 		s = s[:500]
 	}
-	// Strip control characters (keep newlines for MOTD but not in player messages)
 	buf := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if c == '\n' || c == '\r' {
 			buf = append(buf, ' ')
 		} else if c < 32 && c != '\t' {
-			// skip control chars
+			// skip
 		} else {
 			buf = append(buf, c)
 		}

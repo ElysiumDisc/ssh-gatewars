@@ -1,10 +1,10 @@
-# Development Guide
+# GateWars v3 — Development Guide
 
 ## Prerequisites
 
 - **Go 1.22+** — [install](https://go.dev/dl/)
-- A terminal with 256-color support (most modern terminals)
-- An SSH client (OpenSSH, PuTTY, etc.)
+- A terminal with 256-color support
+- An SSH client (OpenSSH, etc.)
 
 ## Setup
 
@@ -19,203 +19,207 @@ go mod download
 ```bash
 make build    # Compile to ./gatewars
 make run      # Build + run
+make dev      # Build + run with fixed seed and 20 planets
 make vet      # Run go vet
-make clean    # Remove binary
+make clean    # Remove binary + database
 ```
 
-On first launch, the server generates an SSH host key pair (`gatewars_host_key`, `gatewars_host_key.pub`) and creates the SQLite database.
-
-```bash
-./gatewars --port 2222 --seed 42 --db dev.db
-```
+On first launch, the server generates an SSH host key pair and creates the SQLite database.
 
 ## Testing Locally
 
 ```bash
 # Terminal 1 — server
-make run
+make dev
 
 # Terminal 2 — client
 ssh -p 2222 -o StrictHostKeyChecking=no localhost
 ```
 
-Multiple clients can connect simultaneously. Each SSH key gets its own character.
+Multiple clients can connect simultaneously. Each SSH key gets its own progression.
 
-## Project Structure
+## Package Layout
 
 ```
-cmd/server/main.go          Entry point — flag parsing, wiring, server start
+cmd/server/main.go              Entry point, flag parsing, goroutine wiring
 internal/
   core/
-    config.go               GameConfig — network, world gen, combat tuning
-    types.go                Vec2, Rect, Pos, Direction
-    session.go              SessionInfo (per-connection metadata)
-  simulation/
-    engine.go               10 Hz tick loop, per-planet ticking, enemy AI, projectiles
-    action.go               PlayerAction types (move, interact, dial, pickup, fire, reload)
-    snapshot.go             Per-planet immutable snapshots (tiles, enemies, projectiles)
-    planetinstance.go       Active planet lifecycle (load, tick, unload, projectile spawning)
-    galaxy.go               Galaxy-level state, planet registry
-    campaign.go             Campaign / game session management
-    colony.go               Colony state (legacy, retained for future)
-    tech.go                 Tech state (legacy, retained for future)
-  gamedata/
-    tiles.go                Tile types (floor, wall, door, gate, cover values, opacity)
-    biomes.go               Biome templates with tile distributions and enemy spawns
-    items.go                25+ weapons, armor, consumables, ammo types, crafting materials
-    enemies.go              20+ enemy types with AI behaviors, ranged stats, faction tags
-    gateaddresses.go        39-glyph alphabet, named addresses, hash function
-    loot.go                 Faction-specific loot tables (jaffa, kull, ori, replicator, etc.)
-    factions.go             NPC reputation factions (Tok'ra, Free Jaffa, Asgard)
-    hulls.go                Ship hull definitions (legacy)
-    components.go           Ship component definitions (legacy)
-  world/
-    tilemap.go              TileMap — 2D grid, collision, tile lookup
-    generator.go            BSP room generator, corridor carving, entity placement
-    sgc.go                  Fixed SGC hub layout (gate room, armory, briefing, infirmary, mess)
-    gate.go                 Stargate dialing, address validation, address→seed mapping
-    los.go                  Bresenham line-of-sight, LOS checks, ray casting
-  entity/
-    character.go            Player character — HP, level, XP, position, equipment, ammo
-    enemy.go                NPC enemy — 8-state AI (idle, patrol, alert, chase, attack, flee, regroup, stunned)
-    inventory.go            Item container, equip slots, weight calculation
-  combat/
-    damage.go               Bump-attack damage calc, death, XP rewards
-    ranged.go               Ranged attack resolution — range, LOS, accuracy, cover penalty
-    cover.go                Cover calculation — per-tile cover values, attacker-defender geometry
-    projectile.go           Projectile entity — precomputed Bresenham path, per-tick advance
-  chat/
-    hub.go                  Chat message hub — goroutine with channel-based routing
-    channel.go              Channel management (#ops, #local, #sg-team, @DM)
-    message.go              ChatMessage type, formatting, timestamps
-    commands.go             Slash commands (/help, /tune, /roster, /who, /callsign, /team, etc.)
-    walter.go               Walter NPC — announces gate events, arrivals, departures, level ups
-  server/
-    ssh.go                  Wish SSH server, Bubbletea middleware
-    identity.go             SSH key → fingerprint, display name extraction
-    limiter.go              Token-bucket rate limiter, per-key session caps
+    config.go                   GameConfig with all tunable parameters
+    session.go                  Per-SSH-connection metadata
+    types.go                    Shared types: Vec2, Rect, Pos
+  game/
+    galaxy.go                   Galaxy state, planet collection
+    planet.go                   Planet struct (status, invasion, surge, bounty)
+    chair.go                    Ancient Control Chair (faction-based scaling)
+    drone.go                    Drone types, tiers, per-owner tracking
+    replicator.go               Enemy types and stats
+    faction.go                  Ancient vs Ori paths + scaling definitions
+    tactic.go                   Drone targeting tactics (Spread/Focus/Perimeter)
+  engine/
+    engine.go                   Main tick loop, surge rotation, milestones, New Game+
+    defense.go                  Per-planet defense, salvo firing, tactic targeting, surge modifier
   store/
-    migrations.go           SQLite schema (characters, inventory, addresses, factions, chat, teams)
-    player.go               Character CRUD, inventory, discovered addresses, chat history
+    player.go                   PlayerStore (SQLite CRUD, ZPM, upgrades)
+    migrations.go               v3 schema (players, galaxy_planets, chat, teams)
+    chat.go                     Chat message persistence
+    team.go                     Team management
+    callsign.go                 Callsign uniqueness, mutes
+  chat/
+    hub.go                      Single-goroutine chat event router
+    channel.go                  Channel + RingBuffer
+    message.go                  Message/Event type definitions
+    commands.go                 Slash command handlers
+    walter.go                   Walter NPC + game event announcements
+  server/
+    ssh.go                      Wish SSH server + per-connection handler
+    identity.go                 SSH key fingerprinting
+    limiter.go                  Token bucket rate limiter
   tui/
-    model.go                Bubbletea Model — state machine, Update, View, chat integration
-    state.go                ViewState enum, FocusTarget (game/chat)
-    keybinds.go             Key → action mapping (movement, fire, reload, chat, etc.)
-    termcaps.go             Terminal capability detection
+    model.go                    Bubbletea model, state machine, input handling
+    state.go                    State enum (Splash -> Callsign -> Atlantis -> Throne/Galaxy -> Defense)
     views/
-      splash.go             Title screen with stargate ASCII art
-      dhd.go                Circular DHD — 3 concentric glyph rings, lit-up dialed symbols
-      planet.go             Planet exploration tile map with fog of war
-      aimmode.go            Aim mode overlay — targeting reticle, LOS line, range display
-      hud.go                HUD bar (HP, weapon, ammo, location, threat level)
-      inventory.go          Inventory/equipment modal
-      chatpanel.go          Chat panel overlay (hidden/compact/expanded), toast notifications
-      starmap.go            Astroterm-inspired gate network browser with constellation lines
+      theme.go                  Centralized color palette, pre-built styles, layout helpers
+      splash.go                 Multi-phase animated boot sequence
+      callsign.go               Biometric identification terminal
+      atlantis.go               Responsive hub (stats, chair art, chat side-by-side)
+      galaxy.go                 Sensor display planet browser with detail panel
+      throne.go                 Upgrade terminal (factions, drone tiers, reset)
+      defense.go                Radial defense view with concentric rings, entity rendering
+      chatpanel.go              Rounded-border chat panel with word-aware wrapping
 ```
 
-## Architecture Overview
-
-### Concurrency Model
+## State Machine
 
 ```
-┌─────────────┐     actions      ┌──────────────┐    atomic     ┌──────────────┐
-│  TUI Session │ ──────────────▶ │    Engine     │ ──────────▶  │ PlanetSnap   │
-│  (reader)    │  chan(1000)      │ (single writer)│  Pointer    │  (immutable)  │
-└─────────────┘                  └──────────────┘              └──────────────┘
-       ▲                                                              │
-       └──────────────────── reads (lock-free) ◀──────────────────────┘
-
-┌──────────────┐    chan         ┌──────────────┐
-│  Chat Hub    │ ◀────────────  │  TUI Session  │
-│  (goroutine) │  outbox(200)   │  chatConnect  │
-└──────────────┘                └──────────────┘
-       │ broadcasts                    ▲
-       └───────────────────────────────┘
+Splash -> Callsign -> Atlantis (hub)
+                        | t          | g
+                     Throne       Galaxy (browser)
+                     (upgrades)      | enter
+                        | q       Defense (gameplay)
+                     Atlantis        | q
+                                  Atlantis
 ```
 
-- **Single writer:** The engine goroutine ticks all active planet instances at 10Hz. Only it mutates game state.
-- **Multi reader:** TUI sessions read the snapshot for their current planet. No locks needed.
-- **Planet lifecycle:** Instances loaded on first dial, unloaded when all players leave (unless persistent).
-- **Chat hub:** Separate goroutine with channel-based message routing. Each TUI session has a buffered outbox channel.
+Chat is available in all states via `c` key.
 
-### Engine Tick (10Hz)
+## Concurrency Model
 
-1. **Drain actions** — Process all queued player actions (move, interact, dial, pickup, fire, reload)
-2. **Tick planets** — For each active planet instance:
-   - Enemy AI state machine (patrol → alert → chase → attack → flee)
-   - Enemy ranged attacks (LOS check, projectile spawning)
-   - Stun/cooldown countdowns
-3. **Tick projectiles** — Advance all projectiles along precomputed paths, check collisions (walls, enemies, players), apply damage
-4. **Publish snapshots** — Atomic pointer swap per-planet for lock-free reader access
-5. **Cleanup** — Unload empty non-persistent planets periodically
+```
+SSH Connection -> Bubbletea Program (per player)
+                      | (actions)
+Engine Goroutine -> tick loop -> DefenseInstances
+                      | (game events)
+Chat Hub Goroutine -> event routing -> session outboxes
+                      ^ (chat events)
+TUI Programs ----------
+```
 
-### Combat System
+- **Engine**: single writer, sync.RWMutex for instance access, atomic snapshots for galaxy
+- **Chat Hub**: single goroutine, channel-based, no locks
+- **TUI**: reads snapshots (lock-free), sends events via channels
 
-**Melee:** Walk into an enemy tile to bump-attack. Damage = weapon power - armor defense. Enemies bump-attack back during their AI tick.
+## Defense Simulation
 
-**Ranged:** Press `f` to enter aim mode. Move targeting reticle with WASD/arrows. Green LOS line = clear shot, red = blocked. Enter to fire. Projectiles travel across the map at weapon-specific speed.
+Each planet with active defenders has a DefenseInstance:
 
-**Cover:** Tiles between attacker and defender provide cover bonuses that reduce accuracy:
-- Wall: 75%, Half wall: 50%, Crate/Console: 40%, Tree: 30%, Rubble: 25%, Pillar: 75%, Altar: 60%
+1. **Wave spawning**: replicators spawn at SpawnRadius from center, approach inward
+2. **Chair auto-fire**: each chair fires drones at nearest replicator on cooldown
+3. **Drone tracking**: drones home toward their target, re-aim each tick
+4. **Collision**: drone hits replicator -> damage, splash, or pierce depending on tier
+5. **Breach check**: replicator reaches chair -> shield damage
+6. **Hold timer**: accumulates ticks while chairs survive; reaches threshold -> liberation
 
-**Enemy AI states:** Idle → Patrol → Alert (heard something) → Chase → Attack (melee or ranged) → Flee (low HP) → Regroup → Stunned
+## Replicator Types
 
-### Chat System
+| Type | HP | Speed | Damage | ZPM Drop |
+|------|-----|-------|--------|----------|
+| Bug (Basic) | 1 | 1.0x | 1 | 5 |
+| Sentinel (Armored) | 3 | 0.7x | 2 | 15 |
+| Queen | 10 | 0.4x | 5 | 50 |
 
-Devzat-inspired chat with Hub goroutine for message routing:
-- **Channels:** #ops (global), #local (planet-scoped), #sg-team (team channel), @DM (direct messages)
-- **Walter NPC:** Announces gate activations, player arrivals/departures, level ups, deaths
-- **SG teams:** Create, invite, leave, kick, disband — each team gets a chat channel
-- **Slash commands:** /help, /tune, /roster, /who, /callsign, /me, /dm, /mute, /unmute, /motd, /clear, /team, /iris, /indeed, /kree, /shol'va
-- **TUI integration:** Chat panel overlay with 3 states (hidden/compact/expanded), focus management (game/chat), toast notifications
+## Factions (Ancient vs Ori)
 
-### Star Map
+Players choose a faction path in the Throne. Each has different scaling:
 
-Astroterm-inspired gate network browser (`m` key):
-- **Positioning:** Each gate address seed deterministically generates (x, y) coordinates in world space. Named planets (Earth, Abydos, etc.) have fixed iconic positions forming a constellation pattern.
-- **Background:** Procedural star field (dim `.` and `·` dots) seeded from a fixed seed for consistency.
-- **Constellation lines:** Named planets connected by dotted lines (Earth↔Abydos, Earth↔Chulak, etc.).
-- **Star rendering:** Glyph varies by threat level (∗ → ✦ → ★ → ✹ → ✵), colored by biome theme. Named planets use ◉.
-- **Navigation:** Arrow keys pan, +/- zoom, Tab/Shift+Tab cycle through stars, Enter dials selected address.
-- **Info panel:** Shows selected star's name, biome, address (glyph + numeric), and threat bar.
+| Stat | Ancient | Ori |
+|------|---------|-----|
+| Max Drones | 5 + 4/level (up to 45) | 3 + 2/level (up to 23) |
+| Drone Damage | 1.0x base | 2.0x base |
+| Shield HP | 1.25x (125%) | 0.8x (80%) |
+| Fire Rate | 10 → 4 ticks | 7 → 3 ticks |
+| Salvo | 1 + level/3 (max 4) | 1 + level/4 (max 3) |
 
-### Adding a New Feature
+Switching faction resets all upgrades. A full reset option is also available in the Throne (zeroes ZPM, chair level, drone tier, and faction).
 
-**New enemy type:** Add to `internal/gamedata/enemies.go`, update biome spawn tables in `biomes.go`, add loot table in `loot.go`.
+## Drone Tiers
 
-**New weapon:** Add to `internal/gamedata/items.go` with range, accuracy, ammo type, projectile glyph/color. Add ammo type if needed.
+Base damage before faction multiplier:
 
-**New item:** Add to `internal/gamedata/items.go`, add to loot tables in `loot.go`.
+| Tier | Color | Damage | Speed | Special |
+|------|-------|--------|-------|---------|
+| Standard | Yellow | 1 | 1.0x | -- |
+| Swift | Cyan | 1 | 1.5x | -- |
+| Blast | Magenta | 2 | 1.0x | Splash (2.0 radius) |
+| Piercing | White | 3 | 1.2x | Passes through targets |
 
-**New player action:** Add type to `simulation/action.go`, handle in `engine.go`, trigger from `tui/model.go`.
+## Drone Tactics
 
-**New TUI view:** Add `ViewState` in `tui/state.go`, add render function in `views/`, wire in `model.go`.
+Switchable during defense with `[1]` `[2]` `[3]` keys:
 
-**New chat command:** Add handler in `chat/commands.go`, register in the command dispatch table.
+| Tactic | Key | Targeting |
+|--------|-----|-----------|
+| Spread | 1 | Nearest enemies (default) |
+| Focus | 2 | Strongest threat first (queens) |
+| Perimeter | 3 | Enemies closest to center |
 
-**New persistence:** Add migration to `store/migrations.go`, add CRUD methods to `store/player.go`.
+## Galaxy Events
+
+- **Replicator Surges** — random invaded planet gets surge flag: 2x spawns, 2x ZPM rewards
+- **Planet Bounties** — each planet has bounty = invasion_level x 10 x cycle ZPM, awarded on liberation
+- **Liberation Milestones** — server-wide announcements at 25%, 50%, 75%, 100% galaxy freed
+- **New Game+** — when 100% liberated, all planets reset with scaled difficulty (cycle counter increments)
+
+## Hold Timer
+
+- Base: 5 minutes (300 seconds = 3000 ticks at 10Hz)
+- Scales: 5 min x number of players
+- 1 player = 5 min, 2 players = 10 min, 3 = 15 min
+
+## Database Schema
+
+- `players` — SSH fingerprint, callsign, ZPM, chair level, drone tier, faction, stats
+- `galaxy_planets` — persistent galaxy state
+- `chat_messages` — persistent chat (#ops, #team)
+- `teams` / `team_members` — SG team management
+- `callsigns` — unique callsign mapping
+- `mutes` — player mute list
+
+## Chat Channels
+
+- `#ops` — global, persistent, auto-joined
+- `#planet:<name>` — per-planet, ephemeral, joined on deploy
+- `#sg-<name>` — team, persistent
+- `[DM]` — direct messages, ephemeral
 
 ## Debugging
 
 ```bash
-# Deterministic world generation
-./gatewars --seed 12345
+# Deterministic galaxy
+./gatewars --seed 42 --planets 10
 
-# Check SQLite database
-sqlite3 gatewars.db "SELECT * FROM characters;"
-sqlite3 gatewars.db "SELECT * FROM inventory;"
-sqlite3 gatewars.db "SELECT * FROM discovered_addresses;"
-sqlite3 gatewars.db "SELECT * FROM chat_messages;"
-sqlite3 gatewars.db "SELECT * FROM teams;"
+# Check database
+sqlite3 gatewars.db "SELECT * FROM players;"
+sqlite3 gatewars.db "SELECT * FROM galaxy_planets;"
+sqlite3 gatewars.db "SELECT * FROM chat_messages ORDER BY created_at DESC LIMIT 20;"
 ```
 
-The server logs to stderr via `charmbracelet/log`.
+The server logs to stderr via charmbracelet/log.
 
 ## Roadmap
 
-- [x] Phase 1 — SGC hub, gate dialing, procedural planets, bump combat, loot, persistence
-- [x] Phase 2 — Chat system, SG teams, Walter NPC, multiplayer visibility
-- [x] Phase 3 — Ranged combat, aim mode, cover system, projectiles, 25+ weapons, 20+ enemies
-- [ ] Phase 4 — Tech tree, faction reputation, crafting, SGC lab
-- [ ] Phase 5 — Named planets (Abydos, Chulak, Dakara...), missions, server-wide events
-- [ ] Phase 6 — Specializations, perks, ascension, ASCII art polish
+- [x] Phase 1 — Foundation (SSH, engine, defense sim, TUI, chat)
+- [x] Phase 2 — Upgrade system (Throne view, ZPM spending, chair levels, drone tier unlocks)
+- [x] Phase 3 — Visual polish (SGC terminal aesthetic, theme system, animations)
+- [x] Phase 4 — Drone tactics (Spread/Focus/Perimeter targeting modes)
+- [x] Phase 5 — Galaxy events (surges, bounties, milestones, New Game+)
+- [ ] Phase 6 — Specializations, ascension, ASCII art mastery

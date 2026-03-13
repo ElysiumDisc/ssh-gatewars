@@ -1,103 +1,135 @@
 # Changelog
 
-All notable changes to SSH GateWars are documented here.
+## v3.3.0 — Factions, Tactics & Galaxy Events (2026-03-13)
 
-## v2.3.0 — Star Map (2026-03-11)
+Full drone upgrade overhaul, Ancient vs Ori factions, drone tactics, galaxy events, New Game+.
 
-### Added
-- **Star map** — `m` to open astroterm-inspired gate network browser
-- **Starfield rendering** — procedural background stars with depth layers
-- **Constellation lines** — named planets connected by dotted lines forming a Stargate constellation
-- **Star glyphs by threat** — ∗ (low), ✦ (medium), ★ (high), ✹ (extreme), ◉ (named)
-- **Biome-colored stars** — each star colored by its planet's biome type
-- **Pan & zoom** — WASD/arrows to pan, +/- to zoom, Tab/Shift+Tab to cycle stars
-- **Star info panel** — planet name, biome, gate address (symbols + code), threat bar
-- **Quick dial from map** — Enter on selected star to dial directly
-- **Current location indicator** — your planet highlighted in green
-- **Named planet positions** — Earth, Abydos, Chulak, Tollana, Cimmeria, Dakara, Langara, Atlantis at fixed iconic positions
+### Changed — ZPM Economy
+- **Bug ZPM**: 1 → 5
+- **Sentinel ZPM**: 3 → 15
+- **Queen ZPM**: 10 → 50
+- Upgrade costs unchanged (Swift 100, Blast 250, Piercing 500, Chair 50-550)
+
+### New — Drone Overhaul
+- **Aggressive drone scaling** — Ancients: 5 + 4/level (up to 45 drones), Ori: 3 + 2/level (up to 23)
+- **Salvo firing** — chairs fire 1-4 drones per shot based on level (salvos scale by faction)
+- **Fire rate scaling** — higher chair level = faster firing (down to 0.3-0.4s intervals)
+- **Per-owner drone counting** — each player's drones tracked independently (fixes shared-pool bug)
+- **Faction-adjusted damage** — Ori drones deal 2x damage; Ancients have +25% shields
+
+### New — Factions (Ancient vs Ori)
+- **Ancient Path** — drone swarm masters: more drones, stronger shields, balanced damage
+- **Ori Path** — devastating firepower: fewer drones, 2x damage, faster fire rate, weaker shields
+- **Faction switching** via Throne — resets all upgrades (fresh build)
+- **Visual identity** — Ancients pulse cyan, Ori pulse orange
+- **Persistent** — faction stored in SQLite, survives reconnect
+
+### New — Drone Tactics (Phase 4)
+- **Spread** `[1]` — target nearest enemies (default)
+- **Focus** `[2]` — all drones focus strongest threat (queens first)
+- **Perimeter** `[3]` — prioritize enemies closest to center
+- Switchable during defense via number keys, shown in HUD
+
+### New — Galaxy Events (Phase 5)
+- **Replicator Surges** — random invaded planets get surge flag: 2x spawns, 2x ZPM
+- **Planet bounties** — each planet has a bounty (invasion_level × 10 ZPM) awarded on liberation
+- **Liberation milestones** — server-wide announcements at 25%, 50%, 75%, 100% galaxy freed
+- **New Game+** — when 100% galaxy is liberated, all planets reset with scaled-up difficulty
+- **Cycle counter** — galaxy map shows current threat cycle
+
+### New — Player Reset
+- **Full reset** via Throne — zeroes ZPM, chair level, drone tier, faction
+- **Faction switch** — switching path also resets upgrades (respec)
+
+### Changed
+- Defense HUD shows current tactic, surge indicator, and bounty
+- Galaxy view shows bounty ZPM, surge warnings, liberation percentage, cycle number
+- Throne view shows power preview (next level stats), faction badge, drone damage per tier
+- Engine event bridge uses proper type mapping (fixes misrouted chat announcements)
+- DroneFireRate default: 15→10 ticks (faster base firing)
+- DB migration adds `faction` column to players table
+
+### Fixed
+- Event bridge between engine and chat used direct integer cast causing wrong announcements
+- Drone count was shared across all players with same tier (now per-owner)
 
 ---
 
-## v2.2.0 — Phase 3: Combat Overhaul (2026-03-11)
+## v3.2.0 — Upgrade Throne (2026-03-13)
 
-### Added
-- **Ranged combat** — `f` to enter aim mode with targeting reticle, LOS line, Enter to fire
-- **Projectile system** — projectiles travel across the map with per-weapon glyphs and colors
-- **Line of sight** — Bresenham ray casting for ranged attacks and enemy detection
-- **Cover system** — walls (75%), crates/consoles (40%), trees (30%), rubble (25%) reduce accuracy
-- **Aim mode TUI** — targeting reticle, green/red LOS indicator, range display
-- **25+ weapons** — full catalog across 5 tech origins (Earth, Goa'uld, Ancient, Asgard, Ori)
-  - Earth: Combat Knife, M9, P-90, USAS-12, M249 SAW, C-4
-  - Goa'uld: Staff Weapon, Zat, Kara Kesh, Pain Stick, Shock Grenade
-  - Ancient: Drone, Hand Weapon, Anti-Replicator Gun
-  - Asgard: Plasma Beam
-  - Ori: Staff, Stun Weapon
-- **Ammo types** — 11 ammo types (9mm, 5.7mm, naquadah charges, zat charges, etc.)
-- **20+ enemy types** — full bestiary with faction affiliations
-  - Goa'uld: Jaffa Warrior, Serpent Guard, Horus Guard, Kull Warrior, Ashrak, Commander, System Lord
-  - Replicator: Bug, Soldier, Human-Form
-  - Ori: Soldier, Prior, Commander
-  - Wildlife: Unas, Giant Scarab, Crystal Entity, Sodan Warrior
-- **Enemy ranged AI** — enemies fire projectiles, seek cover, flee at low HP
-- **AI state machine** — Idle, Patrol, Alert, Chase, Attack, Flee, Regroup, Stunned states
-- **New tile types** — half walls, pillars, altars, inscriptions, vents
-- **Crafting materials** — naquadah samples, ancient data pads, kull fragments, replicator shards
-- **Expanded loot tables** — per-faction loot (jaffa, serpent guard, kull, replicator, ori, wildlife, crates)
+Ancient Control Chair upgrade terminal — spend ZPM to power up.
 
-## v2.1.0 — Phase 2: Chat & Multiplayer (2026-03-11)
+### New
+- **Throne view** (`views/throne.go`) — full-screen upgrade terminal accessible from Atlantis via `[t]`
+- **Chair upgrades** — spend ZPM to level up shield generator (Lv0→10), each level grants +1 drone slot and +5 shield HP
+- **Drone tier unlocks** — Swift (100 ZPM), Blast (250 ZPM), Piercing (500 ZPM)
+- **Animated throne** — pulsing cyan glow on control chair art, timed status messages on upgrade success/failure
+- **Cost scaling** — chair cost = (level+1) x 50 ZPM; higher levels cost more
+- **State machine** — new `StateThrone` between Atlantis and Galaxy in flow
 
-### Added
-- **Chat system** — devzat-inspired with Hub goroutine, channel-based routing
-- **Chat channels** — #ops (global), #local (planet-scoped), #sg-team, @DM
-- **Walter NPC** — announces gate activations, arrivals, departures, level ups, deaths
-- **Slash commands** — /help, /tune, /roster, /who, /callsign, /me, /dm, /mute, /unmute, /motd, /clear, /team, /iris, /indeed, /kree, /shol'va
-- **SG teams** — create, invite, leave, kick, disband with team chat channels
-- **Chat panel overlay** — 3 states (Hidden/Compact/Expanded), composited over game view
-- **Focus management** — FocusGame/FocusChat routing for keyboard input
-- **Toast notifications** — chat messages appear as toast when chat panel is hidden
-- **Player list modal** — Tab to view online players with callsign, level, location
-- **Chat persistence** — messages saved to SQLite, backlog delivery on channel join
-- **Mute system** — per-player mute lists persisted to DB
-- **Rate limiting** — 5 messages per 3 seconds
-- **DHD redesign** — circular ASCII art with 39 glyphs in concentric rings, lit-up dialed symbols
+### Changed
+- Atlantis bottom bar now shows `[t] Throne` key hint
 
-## v2.0.0 — The Reboot (2026-03-11)
+---
 
-Complete reimagining from 4X strategy to multiplayer roguelike/MUD.
+## v3.1.0 — SGC Terminal Aesthetic (2026-03-13)
 
-### Added
-- Stargate network with 7-symbol gate addresses and 39-glyph alphabet
-- Procedural planet generation (BSP rooms, biomes, threat levels)
-- SGC home base with fixed layout (gate room, armory, briefing room, infirmary, mess hall)
-- Bump-to-attack combat system (walk into enemies to fight)
-- Real-time 10Hz simulation (enemies patrol and hunt independently)
-- Per-planet instance management (loaded on-demand, unloaded when empty)
-- Character system (HP, level, XP, equipment, inventory)
-- Fog of war (per-player exploration tracking)
-- Tile-based world rendering with Lipgloss colors
-- DHD gate dialing interface with address input
-- Address book for discovered gate addresses
-- Character persistence (stats, inventory, addresses saved to SQLite)
+Visual overhaul: centralized theme system, animated screens, atmospheric rendering.
+
+### New
+- **Centralized theme** (`views/theme.go`) — True Color palette (Ancient cyan `#00D9FF`, ZPM gold `#FFD700`), pre-built styles, entity style lookup tables for performance
+- **Layout helpers** — `Center()`, `SideBySide()`, `PanelBox()`, `RoundedBox()`, `FormatKeyHint()`, `ProgressBar()`, `ShieldBar()` — eliminate ad-hoc padding throughout
+- **Animated splash** — multi-phase boot sequence: typewriter title reveal → subtitle → gold tagline → progress bar → pulsing prompt, full-screen centered
+- **Callsign terminal** — biometric identification feel, double-line outer panel, rounded input sub-box, pulsing cursor
+- **Atlantis hub** — responsive split layout via `lipgloss.JoinHorizontal`, double-line outer frame, commander status in rounded box, upgraded chair ASCII art, online player count in top bar
+- **Galaxy sensor display** — Unicode status symbols (`●` invaded / `◆` contested / `✧` free), gold-bg highlighted selection, right detail panel on wide terminals (>90 cols), colored aggregate stats
+- **Defense field overhaul** — 3 concentric defense rings (dim→bright), crosshair at center, background star dots, entity glyphs per type (`●`/`■`/`◉` replicators, `✸`/`✦`/`►` drones), queen pulsing red animation, shield bars under chairs (green→yellow→red gradient)
+- **Chat panel** — rounded border, word-wrap on plain text before styling (fixes ANSI-escape break bug), message-type coloring (system=gold, announce=green, whisper=purple)
+- **Frame counter** — `frameCount` field in TUI model for animation (queen pulse, cursor blink)
+
+### Fixed
+- Chat word-wrap no longer breaks mid-ANSI-escape sequence
+- Defense field no longer allocates `lipgloss.NewStyle()` per cell per frame (uses pre-built style lookup tables)
+
+---
+
+## v3.0.0 — Ancient Defense Network (2026-03-13)
+
+Complete reboot from roguelike to cooperative tower defense.
+
+### New
+- **Radial defense view** — chair at center, replicators approach from all directions, drones intercept
+- **Ancient Control Chair** — each player deploys a chair as their defense unit
+- **Drone system** — 4 tiers (Standard/Swift/Blast/Piercing) with auto-targeting and homing
+- **Replicator enemies** — 3 types (Bug/Sentinel/Queen) with scaling difficulty waves
+- **Galaxy map** — shared universe with 50 planets under replicator invasion
+- **Atlantis hub** — personal base showing stats, upgrades, ASCII chair art
+- **Hold timer** — 5 min per player to liberate a planet (co-op scales time)
+- **ZPM economy** — earn from kills, persist across sessions (roguelite loop)
+- **Planet liberation events** — server-wide announcements when planets are freed
+- **Chat system** — carried forward with channel routing, Walter NPC, slash commands, SG teams, DMs
+- **Animated splash** — line-by-line reveal with blinking prompt
+- **Callsign system** — unique persistent callsigns with rename support
+
+### Architecture
+- 10Hz defense engine with per-planet instances and wave spawning
+- Single-writer chat hub with channel-based routing (unchanged)
+- SQLite persistence for player progression and galaxy state
+- Lock-free galaxy snapshots via atomic.Value
+- Radial coordinate system for defense field rendering
 
 ### Removed
-- 4X strategy systems (colonies, economy, tech trees, faction selection)
-- Galaxy map view, colony management, scoreboard
-- Ship design, fleet command, diplomacy stubs
+- Tile-based exploration, BSP generation, fog of war
+- Roguelike combat (melee, ranged, aim mode, cover)
+- 25+ weapons catalog, 20+ enemy bestiary (replaced with drone/replicator system)
+- Inventory system, equipment slots
+- DHD circular dial interface, gate address system
+- SGC hub layout
 
 ---
 
-## v1.0.0 — Layer 1: 4X Strategy (2026-03-10)
+## v2.2.0 — Combat Overhaul (archived)
 
-Full 4X rewrite with colonies, economy, and tech trees. (Superseded by v2.0.0)
-
----
-
-## v0.5.0 — Phase 2: Powers, Persistence, Multiplex Views (2025)
-
-5 factions, SQLite persistence, multiple views, rate limiting.
-
----
-
-## v0.1.0 — Initial Scaffold (2025)
-
-SSH server with Wish + Bubbletea, basic galaxy generation.
+Previous roguelike version. See git tag `v2.2.0-archive` for full history.
+Includes: ranged combat, aim mode, cover system, projectiles, 25+ weapons, 20+ enemies,
+star map, DHD, chat system, SG teams, gate address network.

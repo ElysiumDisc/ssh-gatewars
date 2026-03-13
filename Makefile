@@ -1,4 +1,4 @@
-.PHONY: build run clean vet
+.PHONY: build run clean vet dev
 
 build:
 	go build -o gatewars ./cmd/server
@@ -6,8 +6,11 @@ build:
 run: build
 	./gatewars
 
+dev: build
+	./gatewars --seed 42 --planets 20
+
 clean:
-	rm -f gatewars
+	rm -f gatewars gatewars.db
 
 vet:
 	go vet ./...

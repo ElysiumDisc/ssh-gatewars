@@ -4,10 +4,6 @@ import (
 	"database/sql"
 
 	_ "modernc.org/sqlite"
-
-	"ssh-gatewars/internal/core"
-	"ssh-gatewars/internal/entity"
-	"ssh-gatewars/internal/gamedata"
 )
 
 // PlayerStore handles all SQLite persistence.
@@ -33,20 +29,34 @@ func (s *PlayerStore) Close() error {
 	return s.db.Close()
 }
 
-// PlayerRecord holds basic player info for the SSH server.
+// PlayerRecord holds player progression data.
 type PlayerRecord struct {
-	DisplayName string
-	CallSign    string
+	SSHFingerprint string
+	DisplayName    string
+	CallSign       string
+	ZPMBalance     int
+	ChairLevel     int
+	DroneTier      int
+	Faction        int // 0=Ancient, 1=Ori
+	PlanetsFreed   int
+	TotalKills     int
+	TotalSessions  int
 }
 
 // GetPlayer loads a player record by SSH fingerprint.
 func (s *PlayerStore) GetPlayer(fingerprint string) (*PlayerRecord, error) {
-	row := s.db.QueryRow(
-		"SELECT display_name, call_sign FROM players WHERE ssh_fingerprint = ?",
-		fingerprint,
-	)
+	row := s.db.QueryRow(`
+		SELECT ssh_fingerprint, display_name, call_sign,
+		       zpm_balance, chair_level, drone_tier, faction,
+		       planets_freed, total_kills, total_sessions
+		FROM players WHERE ssh_fingerprint = ?
+	`, fingerprint)
 	var rec PlayerRecord
-	err := row.Scan(&rec.DisplayName, &rec.CallSign)
+	err := row.Scan(
+		&rec.SSHFingerprint, &rec.DisplayName, &rec.CallSign,
+		&rec.ZPMBalance, &rec.ChairLevel, &rec.DroneTier, &rec.Faction,
+		&rec.PlanetsFreed, &rec.TotalKills, &rec.TotalSessions,
+	)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -56,7 +66,7 @@ func (s *PlayerStore) GetPlayer(fingerprint string) (*PlayerRecord, error) {
 	return &rec, nil
 }
 
-// UpsertPlayer creates or updates a player record.
+// UpsertPlayer creates or updates a player record (session bump).
 func (s *PlayerStore) UpsertPlayer(fingerprint, displayName, callSign string) error {
 	_, err := s.db.Exec(`
 		INSERT INTO players (ssh_fingerprint, display_name, call_sign, total_sessions, first_seen, last_seen)
@@ -70,171 +80,88 @@ func (s *PlayerStore) UpsertPlayer(fingerprint, displayName, callSign string) er
 	return err
 }
 
-// LoadCharacter loads a character for a player. Returns nil if no character exists.
-func (s *PlayerStore) LoadCharacter(fingerprint string, cfg core.GameConfig) (*entity.Character, error) {
-	row := s.db.QueryRow(`
-		SELECT c.id, p.display_name, p.call_sign,
-		       c.hp, c.max_hp, c.level, c.xp,
-		       c.missions_completed, c.deaths,
-		       c.location, c.pos_x, c.pos_y,
-		       c.weapon_id, c.armor_id, c.accessory_id
-		FROM characters c
-		JOIN players p ON p.ssh_fingerprint = c.ssh_fingerprint
-		WHERE c.ssh_fingerprint = ?
-		ORDER BY c.id DESC LIMIT 1
-	`, fingerprint)
-
-	var (
-		id          int64
-		displayName string
-		callSign    string
-		hp, maxHP   int
-		level, xp   int
-		missions    int
-		deaths      int
-		location    string
-		posX, posY  int
-		weaponID    string
-		armorID     string
-		accID       string
-	)
-	err := row.Scan(&id, &displayName, &callSign,
-		&hp, &maxHP, &level, &xp,
-		&missions, &deaths,
-		&location, &posX, &posY,
-		&weaponID, &armorID, &accID)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	c := &entity.Character{
-		ID:                id,
-		SSHKey:            fingerprint,
-		DisplayName:       displayName,
-		CallSign:          callSign,
-		HP:                hp,
-		MaxHP:             maxHP,
-		Level:             level,
-		XP:                xp,
-		MissionsCompleted: missions,
-		Deaths:            deaths,
-		Location:          location,
-		Pos:               core.Pos{X: posX, Y: posY},
-		MaxItems:          20,
-		Inventory:         make([]entity.Item, 0),
-	}
-
-	// Load equipment
-	if weaponID != "" {
-		c.Weapon = &entity.Item{DefID: weaponID, Quantity: 1}
-	}
-	if armorID != "" {
-		c.Armor = &entity.Item{DefID: armorID, Quantity: 1}
-	}
-	if accID != "" {
-		c.Accessory = &entity.Item{DefID: accID, Quantity: 1}
-	}
-
-	// Load inventory
-	rows, err := s.db.Query(
-		"SELECT item_id, quantity FROM inventory WHERE character_id = ?", id)
-	if err != nil {
-		return c, nil // return char without inventory on error
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var itemID string
-		var qty int
-		if err := rows.Scan(&itemID, &qty); err == nil {
-			c.Inventory = append(c.Inventory, entity.Item{DefID: itemID, Quantity: qty})
-		}
-	}
-
-	// Load discovered addresses
-	addrRows, err := s.db.Query(
-		"SELECT address FROM discovered_addresses WHERE character_id = ?", id)
-	if err != nil {
-		return c, nil
-	}
-	defer addrRows.Close()
-	for addrRows.Next() {
-		var addrStr string
-		if err := addrRows.Scan(&addrStr); err == nil {
-			if addr, ok := gamedata.ParseAddress(addrStr); ok {
-				c.DiscoveredAddresses = append(c.DiscoveredAddresses, addr)
-			}
-		}
-	}
-
-	return c, nil
+// AddZPM adds ZPM to a player's balance.
+func (s *PlayerStore) AddZPM(fingerprint string, amount int) error {
+	_, err := s.db.Exec(
+		"UPDATE players SET zpm_balance = zpm_balance + ? WHERE ssh_fingerprint = ?",
+		amount, fingerprint)
+	return err
 }
 
-// SaveCharacter persists a character's current state.
-func (s *PlayerStore) SaveCharacter(c *entity.Character) error {
-	tx, err := s.db.Begin()
+// SpendZPM deducts ZPM. Returns false if insufficient.
+func (s *PlayerStore) SpendZPM(fingerprint string, amount int) (bool, error) {
+	res, err := s.db.Exec(
+		"UPDATE players SET zpm_balance = zpm_balance - ? WHERE ssh_fingerprint = ? AND zpm_balance >= ?",
+		amount, fingerprint, amount)
 	if err != nil {
-		return err
+		return false, err
 	}
-	defer tx.Rollback()
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
 
-	weaponID := ""
-	if c.Weapon != nil {
-		weaponID = c.Weapon.DefID
-	}
-	armorID := ""
-	if c.Armor != nil {
-		armorID = c.Armor.DefID
-	}
-	accID := ""
-	if c.Accessory != nil {
-		accID = c.Accessory.DefID
-	}
+// UpgradeChair increments chair level.
+func (s *PlayerStore) UpgradeChair(fingerprint string) error {
+	_, err := s.db.Exec(
+		"UPDATE players SET chair_level = chair_level + 1 WHERE ssh_fingerprint = ?",
+		fingerprint)
+	return err
+}
 
-	if c.ID == 0 {
-		// Insert new character
-		res, err := tx.Exec(`
-			INSERT INTO characters (ssh_fingerprint, hp, max_hp, level, xp,
-			    missions_completed, deaths, location, pos_x, pos_y,
-			    weapon_id, armor_id, accessory_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, c.SSHKey, c.HP, c.MaxHP, c.Level, c.XP,
-			c.MissionsCompleted, c.Deaths, c.Location, c.Pos.X, c.Pos.Y,
-			weaponID, armorID, accID)
-		if err != nil {
-			return err
-		}
-		c.ID, _ = res.LastInsertId()
-	} else {
-		// Update existing character
-		_, err := tx.Exec(`
-			UPDATE characters SET hp=?, max_hp=?, level=?, xp=?,
-			    missions_completed=?, deaths=?, location=?, pos_x=?, pos_y=?,
-			    weapon_id=?, armor_id=?, accessory_id=?
-			WHERE id=?
-		`, c.HP, c.MaxHP, c.Level, c.XP,
-			c.MissionsCompleted, c.Deaths, c.Location, c.Pos.X, c.Pos.Y,
-			weaponID, armorID, accID, c.ID)
-		if err != nil {
-			return err
-		}
-	}
+// UpgradeDroneTier sets the drone tier.
+func (s *PlayerStore) UpgradeDroneTier(fingerprint string, tier int) error {
+	_, err := s.db.Exec(
+		"UPDATE players SET drone_tier = ? WHERE ssh_fingerprint = ?",
+		tier, fingerprint)
+	return err
+}
 
-	// Replace inventory
-	tx.Exec("DELETE FROM inventory WHERE character_id = ?", c.ID)
-	for _, item := range c.Inventory {
-		tx.Exec("INSERT INTO inventory (character_id, item_id, quantity) VALUES (?, ?, ?)",
-			c.ID, item.DefID, item.Quantity)
-	}
+// RecordPlanetFreed increments planets_freed counter.
+func (s *PlayerStore) RecordPlanetFreed(fingerprint string) error {
+	_, err := s.db.Exec(
+		"UPDATE players SET planets_freed = planets_freed + 1 WHERE ssh_fingerprint = ?",
+		fingerprint)
+	return err
+}
 
-	// Replace discovered addresses
-	tx.Exec("DELETE FROM discovered_addresses WHERE character_id = ?", c.ID)
-	for _, addr := range c.DiscoveredAddresses {
-		tx.Exec("INSERT INTO discovered_addresses (character_id, address) VALUES (?, ?)",
-			c.ID, addr.Code())
-	}
+// AddKills adds to total kill count.
+func (s *PlayerStore) AddKills(fingerprint string, count int) error {
+	_, err := s.db.Exec(
+		"UPDATE players SET total_kills = total_kills + ? WHERE ssh_fingerprint = ?",
+		count, fingerprint)
+	return err
+}
 
-	return tx.Commit()
+// SetFaction changes a player's faction.
+func (s *PlayerStore) SetFaction(fingerprint string, faction int) error {
+	_, err := s.db.Exec(
+		"UPDATE players SET faction = ? WHERE ssh_fingerprint = ?",
+		faction, fingerprint)
+	return err
+}
+
+// ResetPlayer resets a player's progression (ZPM, chair level, drone tier) but keeps callsign and stats.
+func (s *PlayerStore) ResetPlayer(fingerprint string) error {
+	_, err := s.db.Exec(`
+		UPDATE players SET
+			zpm_balance = 0,
+			chair_level = 1,
+			drone_tier = 0,
+			faction = 0
+		WHERE ssh_fingerprint = ?
+	`, fingerprint)
+	return err
+}
+
+// SaveGalaxyPlanet persists a planet's state.
+func (s *PlayerStore) SaveGalaxyPlanet(id int, name string, seed int64, status int, invasionLevel int) error {
+	_, err := s.db.Exec(`
+		INSERT INTO galaxy_planets (id, name, seed, status, invasion_level)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			status = excluded.status,
+			invasion_level = excluded.invasion_level,
+			freed_at = CASE WHEN excluded.status = 2 THEN CURRENT_TIMESTAMP ELSE galaxy_planets.freed_at END
+	`, id, name, seed, status, invasionLevel)
+	return err
 }

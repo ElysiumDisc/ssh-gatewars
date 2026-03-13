@@ -13,8 +13,8 @@ import (
 
 	"ssh-gatewars/internal/chat"
 	"ssh-gatewars/internal/core"
+	"ssh-gatewars/internal/engine"
 	"ssh-gatewars/internal/server"
-	"ssh-gatewars/internal/simulation"
 	"ssh-gatewars/internal/store"
 	"ssh-gatewars/internal/tui"
 )
@@ -28,13 +28,14 @@ func main() {
 	flag.StringVar(&cfg.DBPath, "db", cfg.DBPath, "SQLite database path")
 	flag.IntVar(&cfg.MaxSessions, "max-sessions", cfg.MaxSessions, "max concurrent SSH sessions")
 	flag.IntVar(&cfg.MaxPerKey, "max-per-key", cfg.MaxPerKey, "max sessions per SSH key")
-	flag.Float64Var(&cfg.ConnectRate, "connect-rate", cfg.ConnectRate, "max new connections/sec")
-	flag.Int64Var(&cfg.Seed, "seed", cfg.Seed, "world seed (0=random)")
+	flag.Int64Var(&cfg.Seed, "seed", cfg.Seed, "galaxy seed (0=random)")
+	flag.IntVar(&cfg.NumPlanets, "planets", cfg.NumPlanets, "number of planets in galaxy")
 	flag.Parse()
 
-	log.Info("GateWars v2.0 starting",
+	log.Info("GateWars v3.0 starting",
 		"port", cfg.Port,
 		"seed", cfg.Seed,
+		"planets", cfg.NumPlanets,
 		"max_players", cfg.MaxSessions,
 	)
 
@@ -45,25 +46,59 @@ func main() {
 	}
 	defer playerStore.Close()
 
-	// Create simulation engine.
-	engine := simulation.NewEngine(cfg)
+	// Create game engine.
+	eng := engine.NewEngine(cfg)
 
 	// Create chat hub.
 	chatHub := chat.NewHub(playerStore)
 
-	// Wire engine game events → chat hub.
-	engine.GameEvents = chatHub.GameEvents
+	// Wire engine game events → chat hub (proper type mapping).
+	go func() {
+		for ev := range eng.GameEvents {
+			var chatType chat.GameEventType
+			switch ev.Type {
+			case engine.GamePlayerDeploy:
+				chatType = chat.GamePlayerDeploy
+			case engine.GamePlayerRetreat:
+				chatType = chat.GamePlayerRetreat
+			case engine.GamePlanetLiberated:
+				chatType = chat.GamePlanetLiberated
+			case engine.GamePlanetFailed:
+				chatType = chat.GamePlanetFailed
+			case engine.GamePlayerConnect:
+				chatType = chat.GamePlayerConnect
+			case engine.GamePlayerDisconnect:
+				chatType = chat.GamePlayerDisconnect
+			case engine.GameSurgeStart:
+				chatType = chat.GameSurgeStart
+			case engine.GameSurgeEnd:
+				chatType = chat.GameSurgeEnd
+			case engine.GameMilestone:
+				chatType = chat.GameMilestone
+			case engine.GameGalaxyReset:
+				chatType = chat.GameGalaxyReset
+			default:
+				continue
+			}
+			chatHub.GameEvents <- chat.GameEvent{
+				Type:       chatType,
+				Callsign:   ev.Callsign,
+				PlanetName: ev.PlanetName,
+				Extra:      ev.Extra,
+			}
+		}
+	}()
 
 	// Create connection limiter.
 	limiter := server.NewConnLimiter(cfg.MaxSessions, cfg.MaxPerKey, cfg.ConnectRate)
 
-	// Create SSH server with model factories.
+	// Create SSH server.
 	sshSrv, err := server.NewSSHServer(server.SSHServerConfig{
 		Cfg:     cfg,
 		Limiter: limiter,
 		NewModel: func(session *core.SessionInfo) tea.Model {
 			return tui.NewModel(tui.ModelConfig{
-				Engine:  engine,
+				Engine:  eng,
 				Store:   playerStore,
 				ChatHub: chatHub,
 				Session: session,
@@ -83,8 +118,8 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go engine.Run(ctx)
-	log.Info("simulation engine started", "tick_rate", cfg.TickRate)
+	go eng.Run(ctx)
+	log.Info("engine started", "tick_rate", cfg.TickRate, "planets", cfg.NumPlanets)
 
 	// Start chat hub.
 	go chatHub.Run(ctx.Done())
