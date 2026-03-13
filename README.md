@@ -8,11 +8,14 @@ The galaxy is being invaded by replicators. You are an Ancient chair operator on
 
 - **Deploy your control chair** to a planet under siege
 - **Your drones fire automatically** at incoming replicator swarms
-- **Choose a faction** — Ancient (drone swarms, strong shields) or Ori (devastating firepower)
+- **Choose a faction** — Ancient (drone swarms, shields, Ascension Pulse) or Ori (devastating firepower, Prior's Wrath)
 - **Set drone tactics** — Spread, Focus, or Perimeter targeting during defense
 - **Hold the planet** for 5 minutes per defender to liberate it
 - **Cooperate** — multiple players can deploy chairs on the same planet
 - **Upgrade** your chair and drones at the Ancient Throne with ZPM earned from kills
+- **Explore the galaxy** — Astrologic star map, Stargate network tube map, or sensor list
+- **Upgrade the gate network** — spend ZPM to upgrade Stargate links for defense bonuses
+- **Send resources** — shield boosts, drone boosts, or ZPM gifts to planets being defended
 - **Galaxy events** — replicator surges (2x spawns, 2x ZPM), planet bounties, liberation milestones
 - **New Game+** — liberate the entire galaxy to trigger a harder cycle
 
@@ -56,7 +59,9 @@ make dev
 
 ### Atlantis (Hub)
 - `t` — Open upgrade throne (spend ZPM on chair levels & drone tiers)
-- `g` — Browse galaxy, select planet to defend
+- `g` — Browse galaxy sensor list
+- `a` — Astrologic star map (2D galaxy projection)
+- `n` — Stargate network tube map (upgrades & transfers)
 - `c` — Open chat
 - `q` — Disconnect
 
@@ -68,6 +73,23 @@ make dev
 ### Galaxy Browser
 - `↑/↓` — Navigate planet list
 - `Enter` — Deploy to selected planet
+- `a` / `n` — Switch to Astro or Network view
+- `q` — Back to Atlantis
+
+### Astrologic View (Star Map)
+- `←→↑↓` — Pan camera
+- `+/-` — Zoom in/out
+- `Tab` — Cycle planet selection
+- `Enter` — Deploy to selected planet
+- `g` / `n` — Switch to Galaxy or Network view
+- `q` — Back to Atlantis
+
+### Stargate Network (Tube Map)
+- `↑/↓` — Navigate stations
+- `Enter` — Deploy to selected planet
+- `u` — Upgrade gate link (spend ZPM for defense bonuses)
+- `s` — Send resources to planet (shield/drones/ZPM)
+- `g` / `a` — Switch to Galaxy or Astro view
 - `q` — Back to Atlantis
 
 ### Defense (Gameplay)
@@ -94,6 +116,8 @@ make dev
 - **10Hz engine** tick loop with per-planet defense instances
 - **Single-writer chat hub** with channel-based message routing
 - **Radial defense view** — chair at center, concentric defense rings, replicators approach from all directions, drones intercept
+- **Astrologic star map** — 2D galaxy projection with constellation lines, planet positions, region labels, pan/zoom
+- **Stargate network tube map** — subway-style topology with named routes, gate upgrades, resource transfers
 - **SGC terminal aesthetic** — True Color Ancient cyan + ZPM gold palette, animated splash, atmospheric rendering
 
 ## Tech Stack

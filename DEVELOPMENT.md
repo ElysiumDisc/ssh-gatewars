@@ -48,19 +48,21 @@ internal/
     session.go                  Per-SSH-connection metadata
     types.go                    Shared types: Vec2, Rect, Pos
   game/
-    galaxy.go                   Galaxy state, planet collection
-    planet.go                   Planet struct (status, invasion, surge, bounty)
+    galaxy.go                   Galaxy state, planet collection, network generation
+    planet.go                   Planet struct (position, status, invasion, surge, bounty)
+    network.go                  Stargate network: links, routes, upgrades, transfer bonuses
     chair.go                    Ancient Control Chair (faction-based scaling)
     drone.go                    Drone types, tiers, per-owner tracking
     replicator.go               Enemy types and stats
-    faction.go                  Ancient vs Ori paths + scaling definitions
+    faction.go                  Ancient vs Ori paths + network affinity + passives
     tactic.go                   Drone targeting tactics (Spread/Focus/Perimeter)
   engine/
-    engine.go                   Main tick loop, surge rotation, milestones, New Game+
-    defense.go                  Per-planet defense, salvo firing, tactic targeting, surge modifier
+    engine.go                   Main tick loop, surge, milestones, gate upgrades, transfers
+    defense.go                  Per-planet defense, salvo, tactics, network bonuses, passives
   store/
     player.go                   PlayerStore (SQLite CRUD, ZPM, upgrades)
-    migrations.go               v3 schema (players, galaxy_planets, chat, teams)
+    network.go                  Gate link upgrades, resource transfer persistence
+    migrations.go               v3 schema (players, galaxy_planets, chat, teams, gate_links)
     chat.go                     Chat message persistence
     team.go                     Team management
     callsign.go                 Callsign uniqueness, mutes
@@ -76,14 +78,17 @@ internal/
     limiter.go                  Token bucket rate limiter
   tui/
     model.go                    Bubbletea model, state machine, input handling
-    state.go                    State enum (Splash -> Callsign -> Atlantis -> Throne/Galaxy -> Defense)
+    state.go                    State enum (Splash -> Callsign -> Atlantis -> views -> Defense)
     views/
       theme.go                  Centralized color palette, pre-built styles, layout helpers
+      draw.go                   Line-drawing utilities (Bresenham, grid helpers)
       splash.go                 Multi-phase animated boot sequence
       callsign.go               Biometric identification terminal
       atlantis.go               Responsive hub (stats, chair art, chat side-by-side)
       galaxy.go                 Sensor display planet browser with detail panel
-      throne.go                 Upgrade terminal (factions, drone tiers, reset)
+      astro.go                  Astrologic star map (2D galaxy projection, pan/zoom)
+      network.go                Stargate network tube map (routes, upgrades, transfers)
+      throne.go                 Upgrade terminal (factions, passives, gate affinity, drone tiers)
       defense.go                Radial defense view with concentric rings, entity rendering
       chatpanel.go              Rounded-border chat panel with word-aware wrapping
 ```
@@ -92,12 +97,15 @@ internal/
 
 ```
 Splash -> Callsign -> Atlantis (hub)
-                        | t          | g
-                     Throne       Galaxy (browser)
-                     (upgrades)      | enter
-                        | q       Defense (gameplay)
-                     Atlantis        | q
-                                  Atlantis
+                        | t       | g        | a         | n
+                     Throne    Galaxy     Astro       Network
+                     (upgrades) (list)   (star map)  (tube map)
+                        | q      | enter    | enter     | enter
+                     Atlantis  Defense    Defense     Defense
+                                 | q        | q         | q
+                              Atlantis    Atlantis    Atlantis
+
+Cross-navigation: g/a/n keys switch between Galaxy, Astro, and Network views.
 ```
 
 Chat is available in all states via `c` key.
@@ -139,7 +147,9 @@ Each planet with active defenders has a DefenseInstance:
 
 ## Factions (Ancient vs Ori)
 
-Players choose a faction path in the Throne. Each has different scaling:
+Players choose a faction path in the Throne. Each has deeply different scaling and abilities:
+
+### Combat Stats
 
 | Stat | Ancient | Ori |
 |------|---------|-----|
@@ -148,6 +158,26 @@ Players choose a faction path in the Throne. Each has different scaling:
 | Shield HP | 1.25x (125%) | 0.8x (80%) |
 | Fire Rate | 10 → 4 ticks | 7 → 3 ticks |
 | Salvo | 1 + level/3 (max 4) | 1 + level/4 (max 3) |
+| Drone Targeting | Adaptive (retargets mid-flight) | Locked trajectory |
+
+### Stargate Network Affinity
+
+| Bonus | Ancient | Ori |
+|-------|---------|-----|
+| Gate Shield Regen | 1.5x (built the network) | 0.5x |
+| Gate Damage Boost | 1.0x | 2.0x (divine wrath) |
+| Gate Spawn Reduction | 1.25x (network mastery) | 1.0x |
+| Gate Upgrade Cost | Normal | -20% discount (zealotry) |
+| Shield Transfer | 1.5x effective | 0.75x effective |
+| Drone Boost Duration | Normal | 1.5x longer |
+| ZPM Earnings | +10% (Ancient wisdom) | Normal |
+
+### Passive Abilities (unlocked at chair level 5)
+
+| Faction | Passive | Effect |
+|---------|---------|--------|
+| Ancient | **Ascension Pulse** | Heals all friendly chairs +3 HP every 5 seconds |
+| Ori | **Prior's Wrath** | AOE 2 damage to all replicators within radius 8 every 8 seconds |
 
 Switching faction resets all upgrades. A full reset option is also available in the Throne (zeroes ZPM, chair level, drone tier, and faction).
 
@@ -179,6 +209,41 @@ Switchable during defense with `[1]` `[2]` `[3]` keys:
 - **Liberation Milestones** — server-wide announcements at 25%, 50%, 75%, 100% galaxy freed
 - **New Game+** — when 100% liberated, all planets reset with scaled difficulty (cycle counter increments)
 
+## Stargate Network
+
+The galaxy contains a Stargate network connecting planets. Generated from planet positions using MST + short-edge redundancy. Grouped into 6 named routes for the tube map display.
+
+### Routes
+- **Milky Way Core** (cyan) — central planets
+- **Pegasus Rim** (magenta) — outer spiral arm
+- **Ori Frontier** (red) — high-difficulty sector
+- **Asgard Reach** (green) — mid-range planets
+- **Nox Passage** (gold) — connecting bridges
+- **Tok'ra Circuit** (silver) — covert pathways
+
+### Gate Link Upgrades
+
+Players spend ZPM to upgrade connections between planets. Each upgrade level provides defense bonuses to connected planets.
+
+| Level | Cost | Shield Regen | Damage Boost | Spawn Reduction |
+|-------|------|-------------|--------------|-----------------|
+| 0 | -- | None | None | None |
+| 1 | 50 ZPM | 0.1%/tick | +5% | None |
+| 2 | 150 ZPM | 0.2%/tick | +10% | -10% |
+| 3 | 400 ZPM | 0.5%/tick | +15% | -20% |
+
+Bonuses are multiplied by faction affinity (e.g., Ori get 2x the damage boost from gate links).
+
+### Resource Transfers
+
+Players can send bonuses to planets being defended:
+
+| Transfer | Cost | Effect |
+|----------|------|--------|
+| Shield Boost | 30 ZPM | +20 HP to all chairs (Ancient: +30 HP) |
+| Drone Boost | 50 ZPM | +2 bonus drones for 60s (Ori: 90s) |
+| ZPM Gift | 25 ZPM | +25 to planet bounty pool |
+
 ## Hold Timer
 
 - Base: 5 minutes (300 seconds = 3000 ticks at 10Hz)
@@ -189,6 +254,8 @@ Switchable during defense with `[1]` `[2]` `[3]` keys:
 
 - `players` — SSH fingerprint, callsign, ZPM, chair level, drone tier, faction, stats
 - `galaxy_planets` — persistent galaxy state
+- `gate_links` — Stargate network link upgrade levels
+- `resource_transfers` — transfer history log
 - `chat_messages` — persistent chat (#ops, #team)
 - `teams` / `team_members` — SG team management
 - `callsigns` — unique callsign mapping
@@ -222,4 +289,6 @@ The server logs to stderr via charmbracelet/log.
 - [x] Phase 3 — Visual polish (SGC terminal aesthetic, theme system, animations)
 - [x] Phase 4 — Drone tactics (Spread/Focus/Perimeter targeting modes)
 - [x] Phase 5 — Galaxy events (surges, bounties, milestones, New Game+)
-- [ ] Phase 6 — Specializations, ascension, ASCII art mastery
+- [x] Phase 6 — Astrologic star map, Stargate network tube map, gate upgrades, resource transfers
+- [x] Phase 7 — Deep faction differentiation (passives, network affinity, drone behavior, economy)
+- [ ] Phase 8 — Ascension, specializations, ASCII art mastery

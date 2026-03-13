@@ -28,22 +28,38 @@ type DefenseInstance struct {
 	rng          *rand.Rand
 	Liberated    bool
 	Failed       bool // all chairs destroyed
+
+	// Network bonuses (set by engine from gate link levels)
+	NetDamageBoost    float64 // +% damage for drones
+	NetSpawnReduction float64 // -% replicator spawns
+	NetShieldRegen    float64 // fraction of max shield restored per tick
+
+	// Resource transfer bonuses
+	BonusDrones   int // extra drone slots from transfers
+	BonusDroneTTL int // ticks remaining for bonus drones
+
+	// Faction ZPM multiplier (set from first deploying faction)
+	ZPMEarnMult float64
+
+	// Passive ability timer (per-chair)
+	passiveTimers map[string]int // playerFP → ticks until next passive
 }
 
 // NewDefenseInstance creates a defense session for a planet.
 func NewDefenseInstance(planet *game.Planet, cfg core.GameConfig) *DefenseInstance {
 	return &DefenseInstance{
-		Planet:       planet,
-		Chairs:       make([]*game.Chair, 0),
-		Drones:       make([]*game.Drone, 0),
-		Replicators:  make([]*game.Replicator, 0),
-		cfg:          cfg,
-		HoldTicks:    0,
-		HoldRequired: 0,
-		WaveNum:      0,
-		WaveTimer:    cfg.TickRate * 3, // first wave after 3 seconds
-		NextID:       1,
-		rng:          rand.New(rand.NewSource(planet.Seed)),
+		Planet:        planet,
+		Chairs:        make([]*game.Chair, 0),
+		Drones:        make([]*game.Drone, 0),
+		Replicators:   make([]*game.Replicator, 0),
+		cfg:           cfg,
+		HoldTicks:     0,
+		HoldRequired:  0,
+		WaveNum:       0,
+		WaveTimer:     cfg.TickRate * 3, // first wave after 3 seconds
+		NextID:        1,
+		rng:           rand.New(rand.NewSource(planet.Seed)),
+		passiveTimers: make(map[string]int),
 	}
 }
 
@@ -58,6 +74,12 @@ func (d *DefenseInstance) AddChair(fp, callsign string, level int, tier game.Dro
 	chair := game.NewChair(fp, callsign, pos, level, tier, faction)
 	d.Chairs = append(d.Chairs, chair)
 	d.recalcHoldTime()
+
+	// Set ZPM earn multiplier from faction (use highest among defenders)
+	fDef := game.FactionDefs[faction]
+	if fDef.ZPMEarnMult > d.ZPMEarnMult {
+		d.ZPMEarnMult = fDef.ZPMEarnMult
+	}
 }
 
 // RemoveChair removes a player's chair.
@@ -108,6 +130,30 @@ func (d *DefenseInstance) Tick() {
 		return
 	}
 
+	// Network bonus: shield regen
+	if d.NetShieldRegen > 0 {
+		for _, c := range d.Chairs {
+			if c.Alive() && c.ShieldHP < c.MaxShield {
+				regen := int(d.NetShieldRegen * float64(c.MaxShield))
+				if regen < 1 {
+					regen = 1
+				}
+				c.ShieldHP += regen
+				if c.ShieldHP > c.MaxShield {
+					c.ShieldHP = c.MaxShield
+				}
+			}
+		}
+	}
+
+	// Bonus drone TTL countdown
+	if d.BonusDroneTTL > 0 {
+		d.BonusDroneTTL--
+		if d.BonusDroneTTL == 0 {
+			d.BonusDrones = 0
+		}
+	}
+
 	// Spawn waves
 	d.WaveTimer--
 	if d.WaveTimer <= 0 {
@@ -145,6 +191,9 @@ func (d *DefenseInstance) Tick() {
 	// Replicators reaching chairs
 	d.checkBreaches()
 
+	// Faction passive abilities
+	d.tickPassives()
+
 	// Clean dead entities
 	d.cleanup()
 
@@ -170,6 +219,15 @@ func (d *DefenseInstance) spawnWave() {
 	// Surge: double spawn count
 	if d.Planet.Surging {
 		count *= 2
+	}
+
+	// Network bonus: spawn reduction
+	if d.NetSpawnReduction > 0 {
+		reduction := int(float64(count) * d.NetSpawnReduction)
+		count -= reduction
+		if count < 1 {
+			count = 1
+		}
 	}
 
 	for i := 0; i < count; i++ {
@@ -221,7 +279,8 @@ func (d *DefenseInstance) fireFromChair(chair *game.Chair) {
 	}
 
 	salvo := chair.SalvoCount()
-	available := chair.MaxDrones - activeDrones
+	maxDrones := chair.MaxDrones + d.BonusDrones
+	available := maxDrones - activeDrones
 	if available <= 0 {
 		return
 	}
@@ -237,6 +296,13 @@ func (d *DefenseInstance) fireFromChair(chair *game.Chair) {
 
 	tierCfg := game.DroneTiers[chair.DroneTier]
 	dmg := chair.DroneDamage() // faction-adjusted damage
+	// Network bonus: damage boost
+	if d.NetDamageBoost > 0 {
+		dmg = int(float64(dmg) * (1 + d.NetDamageBoost))
+		if dmg < 1 {
+			dmg = 1
+		}
+	}
 
 	for _, target := range targets {
 		dir := target.Pos.Sub(chair.Pos)
@@ -336,21 +402,30 @@ func (d *DefenseInstance) findNearestTargets(from core.Vec2, alive []*game.Repli
 }
 
 func (d *DefenseInstance) moveDrones() {
+	// Build a set of which factions can retarget
+	canRetarget := make(map[string]bool)
+	for _, c := range d.Chairs {
+		fDef := game.FactionDefs[c.Faction]
+		canRetarget[c.PlayerFP] = fDef.DroneRetarget
+	}
+
 	for _, dr := range d.Drones {
 		if !dr.Alive {
 			continue
 		}
-		// Re-aim at target if still alive
-		for _, r := range d.Replicators {
-			if r.ID == dr.TargetID && r.Alive {
-				dir := r.Pos.Sub(dr.Pos)
-				dist := math.Sqrt(dir.LenSq())
-				tierCfg := game.DroneTiers[dr.Tier]
-				speed := d.cfg.DroneSpeed * tierCfg.Speed
-				if dist > 0.1 {
-					dr.Vel = core.Vec2{X: dir.X / dist * speed, Y: dir.Y / dist * speed}
+		// Only re-aim if the owner's faction allows retargeting (Ancient=yes, Ori=no)
+		if canRetarget[dr.OwnerFP] {
+			for _, r := range d.Replicators {
+				if r.ID == dr.TargetID && r.Alive {
+					dir := r.Pos.Sub(dr.Pos)
+					dist := math.Sqrt(dir.LenSq())
+					tierCfg := game.DroneTiers[dr.Tier]
+					speed := d.cfg.DroneSpeed * tierCfg.Speed
+					if dist > 0.1 {
+						dr.Vel = core.Vec2{X: dir.X / dist * speed, Y: dir.Y / dist * speed}
+					}
+					break
 				}
-				break
 			}
 		}
 		dr.Pos = dr.Pos.Add(dr.Vel)
@@ -374,6 +449,11 @@ func (d *DefenseInstance) moveReplicators() {
 func (d *DefenseInstance) checkCollisions() {
 	hitRadius := 0.8
 
+	zpmEarnMult := d.ZPMEarnMult
+	if zpmEarnMult < 1.0 {
+		zpmEarnMult = 1.0
+	}
+
 	for _, dr := range d.Drones {
 		if !dr.Alive {
 			continue
@@ -392,7 +472,7 @@ func (d *DefenseInstance) checkCollisions() {
 					r.Alive = false
 					def := game.ReplicatorDefs[r.Type]
 					d.TotalKills++
-					d.ZPMEarned += def.ZPMDrop * zpmMult
+					d.ZPMEarned += int(float64(def.ZPMDrop*zpmMult) * zpmEarnMult)
 				}
 
 				// Splash damage
@@ -408,7 +488,7 @@ func (d *DefenseInstance) checkCollisions() {
 								r2.Alive = false
 								def := game.ReplicatorDefs[r2.Type]
 								d.TotalKills++
-								d.ZPMEarned += def.ZPMDrop * zpmMult
+								d.ZPMEarned += int(float64(def.ZPMDrop*zpmMult) * zpmEarnMult)
 							}
 						}
 					}
@@ -463,6 +543,71 @@ func (d *DefenseInstance) cleanup() {
 		}
 	}
 	d.Replicators = aliveR
+}
+
+// tickPassives fires faction-specific passive abilities for eligible chairs.
+func (d *DefenseInstance) tickPassives() {
+	for _, chair := range d.Chairs {
+		if !chair.Alive() {
+			continue
+		}
+		fDef := game.FactionDefs[chair.Faction]
+		if chair.Level < fDef.PassiveUnlockLv {
+			continue
+		}
+		if fDef.PassiveInterval <= 0 {
+			continue
+		}
+
+		// Initialize timer if missing
+		if _, ok := d.passiveTimers[chair.PlayerFP]; !ok {
+			d.passiveTimers[chair.PlayerFP] = fDef.PassiveInterval
+		}
+
+		d.passiveTimers[chair.PlayerFP]--
+		if d.passiveTimers[chair.PlayerFP] > 0 {
+			continue
+		}
+		d.passiveTimers[chair.PlayerFP] = fDef.PassiveInterval
+
+		// Ancient: Ascension Pulse — heal all friendly chairs
+		if fDef.PassiveShieldPulse > 0 {
+			for _, c := range d.Chairs {
+				if c.Alive() && c.ShieldHP < c.MaxShield {
+					c.ShieldHP += fDef.PassiveShieldPulse
+					if c.ShieldHP > c.MaxShield {
+						c.ShieldHP = c.MaxShield
+					}
+				}
+			}
+		}
+
+		// Ori: Prior's Wrath — AOE damage to nearby replicators
+		if fDef.PassiveWrathDamage > 0 && fDef.PassiveWrathRadius > 0 {
+			zpmMult := 1
+			if d.Planet.Surging {
+				zpmMult = 2
+			}
+			earnMult := d.ZPMEarnMult
+			if earnMult < 1.0 {
+				earnMult = 1.0
+			}
+			for _, r := range d.Replicators {
+				if !r.Alive {
+					continue
+				}
+				if chair.Pos.Dist(r.Pos) <= fDef.PassiveWrathRadius {
+					r.HP -= fDef.PassiveWrathDamage
+					if r.HP <= 0 {
+						r.Alive = false
+						def := game.ReplicatorDefs[r.Type]
+						d.TotalKills++
+						d.ZPMEarned += int(float64(def.ZPMDrop*zpmMult) * earnMult)
+					}
+				}
+			}
+		}
+	}
 }
 
 // ── Snapshots ─────────────────────────────────────────────────────────

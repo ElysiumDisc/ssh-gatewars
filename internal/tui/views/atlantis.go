@@ -93,6 +93,8 @@ func RenderAtlantis(player *store.PlayerRecord, callsign string, msgs []chat.Cha
 	bottomBar := " " +
 		FormatKeyHint("t", "Throne") + "  " +
 		FormatKeyHint("g", "Galaxy") + "  " +
+		FormatKeyHint("a", "Astro") + "  " +
+		FormatKeyHint("n", "Network") + "  " +
 		FormatKeyHint("c", "Chat") + "  " +
 		FormatKeyHint("q", "Disconnect")
 

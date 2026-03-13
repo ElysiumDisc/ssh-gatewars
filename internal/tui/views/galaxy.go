@@ -139,6 +139,8 @@ func RenderGalaxy(g GalaxyModel, w, h int) string {
 	keys := "  " +
 		FormatKeyHint("↑↓", "navigate") + "  " +
 		FormatKeyHint("⏎", "deploy") + "  " +
+		FormatKeyHint("a", "astro") + "  " +
+		FormatKeyHint("n", "network") + "  " +
 		FormatKeyHint("q", "back")
 
 	// ── Assemble list panel ────────────────────────────────────

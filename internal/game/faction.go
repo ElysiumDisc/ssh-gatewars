@@ -22,6 +22,30 @@ type FactionInfo struct {
 	FireRateMin    int     // minimum fire rate
 	ShieldMult     float64 // multiplier on max shield
 	SalvoLevels    [4]int  // level thresholds for salvo 1/2/3/4
+
+	// ── Stargate Network affinity ────────────────────
+	GateShieldMult    float64 // multiplier on gate link shield regen bonus
+	GateDamageMult    float64 // multiplier on gate link damage bonus
+	GateSpawnMult     float64 // multiplier on gate link spawn reduction bonus
+	GateUpgradeDisc   float64 // fraction discount on gate upgrade costs (0.0-1.0)
+	TransferShieldMul float64 // multiplier on received shield transfers
+	TransferDroneMul  float64 // multiplier on received drone boost duration
+
+	// ── Economy ──────────────────────────────────────
+	ZPMEarnMult float64 // multiplier on ZPM earned from kills
+
+	// ── Passive ability ──────────────────────────────
+	PassiveName     string
+	PassiveDesc     string
+	PassiveUnlockLv int  // chair level to unlock passive
+	PassiveInterval int  // ticks between passive activations
+	// Ancient: shield pulse heals all chairs
+	PassiveShieldPulse int // HP healed per pulse (0 = no pulse)
+	// Ori: wrath AOE damages all nearby replicators
+	PassiveWrathDamage int     // damage per AOE pulse (0 = no wrath)
+	PassiveWrathRadius float64 // radius of AOE
+	// Ancient: drones retarget mid-flight
+	DroneRetarget bool
 }
 
 // FactionDefs maps faction to its gameplay definition.
@@ -38,6 +62,25 @@ var FactionDefs = map[Faction]FactionInfo{
 		FireRateMin:    4,
 		ShieldMult:     1.25, // +25% shields
 		SalvoLevels:    [4]int{0, 2, 5, 8}, // salvo 1 at lv0, 2 at lv2, 3 at lv5, 4 at lv8
+
+		// Ancients BUILT the gate network — superior gate affinity
+		GateShieldMult:    1.5,  // +50% gate shield regen (they designed the system)
+		GateDamageMult:    1.0,  // normal gate damage bonus
+		GateSpawnMult:     1.25, // +25% gate spawn reduction (network mastery)
+		GateUpgradeDisc:   0.0,  // no discount
+		TransferShieldMul: 1.5,  // shield transfers 50% more effective
+		TransferDroneMul:  1.0,  // normal drone boost duration
+
+		ZPMEarnMult: 1.1, // +10% ZPM from kills (Ancient wisdom)
+
+		PassiveName:        "Ascension Pulse",
+		PassiveDesc:        "Periodically heals all friendly chairs. Unlocked at chair level 5.",
+		PassiveUnlockLv:    5,
+		PassiveInterval:    50,  // every 5 seconds at 10Hz
+		PassiveShieldPulse: 3,   // +3 shield HP per pulse to all chairs
+		PassiveWrathDamage: 0,
+		PassiveWrathRadius: 0,
+		DroneRetarget:      true, // Ancient drones retarget mid-flight
 	},
 	FactionOri: {
 		Name:        "Ori",
@@ -51,6 +94,25 @@ var FactionDefs = map[Faction]FactionInfo{
 		FireRateMin:    3,   // faster minimum
 		ShieldMult:     0.8, // weaker shields
 		SalvoLevels:    [4]int{0, 3, 6, 9}, // slower salvo progression
+
+		// Ori channel divine power THROUGH the network — damage-focused
+		GateShieldMult:    0.5,  // weaker shield regen (not their focus)
+		GateDamageMult:    2.0,  // DOUBLE gate damage bonus (divine wrath)
+		GateSpawnMult:     1.0,  // normal spawn reduction
+		GateUpgradeDisc:   0.2,  // 20% cheaper gate upgrades (zealotry)
+		TransferShieldMul: 0.75, // shield transfers less effective
+		TransferDroneMul:  1.5,  // drone boosts last 50% longer
+
+		ZPMEarnMult: 1.0, // normal ZPM earnings
+
+		PassiveName:        "Prior's Wrath",
+		PassiveDesc:        "Periodically deals AOE damage to all nearby replicators. Unlocked at chair level 5.",
+		PassiveUnlockLv:    5,
+		PassiveInterval:    80,   // every 8 seconds at 10Hz
+		PassiveShieldPulse: 0,
+		PassiveWrathDamage: 2,    // 2 HP AOE damage
+		PassiveWrathRadius: 8.0,  // hits everything within 8 units of chair
+		DroneRetarget:      false, // Ori drones lock on, never re-aim
 	},
 }
 

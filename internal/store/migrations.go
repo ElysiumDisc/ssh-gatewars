@@ -77,6 +77,26 @@ var migrations = []string{
 
 	// 8: faction column on players (0=Ancient, 1=Ori)
 	`ALTER TABLE players ADD COLUMN faction INTEGER NOT NULL DEFAULT 0`,
+
+	// 9: gate links — Stargate network upgrade state
+	`CREATE TABLE IF NOT EXISTS gate_links (
+		from_id INTEGER NOT NULL,
+		to_id INTEGER NOT NULL,
+		level INTEGER NOT NULL DEFAULT 0,
+		upgraded_by TEXT NOT NULL DEFAULT '',
+		upgraded_at DATETIME,
+		PRIMARY KEY (from_id, to_id)
+	)`,
+
+	// 10: resource transfers log
+	`CREATE TABLE IF NOT EXISTS resource_transfers (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		sender_fp TEXT NOT NULL,
+		target_planet_id INTEGER NOT NULL,
+		bonus_type INTEGER NOT NULL,
+		amount INTEGER NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`,
 }
 
 func runMigrations(db *sql.DB) error {

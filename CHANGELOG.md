@@ -1,5 +1,80 @@
 # Changelog
 
+## v3.4.0 — Astrologic View, Stargate Network & Faction Deepening (2026-03-13)
+
+Galaxy exploration overhaul with two new views, interactive Stargate network mechanics, and deeply differentiated faction paths.
+
+### New — Astrologic Star Map (`a` key)
+- **2D galaxy projection** with all planets positioned in a golden spiral
+- **Constellation lines** drawn along Stargate network routes between planets
+- **Region labels** — Alpha Quadrant, Pegasus Sector, Ori Territory, Asgard Reach
+- **Pan/zoom** — arrow keys to pan, +/- to zoom, camera tracks across the galaxy
+- **Twinkling** — liberated planets shimmer, surging planets pulse with warning
+- **Deploy direct** — select a planet and Enter to deploy from the star map
+- Grid-based rendering (same engine as defense field)
+
+### New — Stargate Network Tube Map (`n` key)
+- **Subway-style topology** — planets as stations, connected by color-coded route lines
+- **6 named routes** — Milky Way Core, Pegasus Rim, Ori Frontier, Asgard Reach, Nox Passage, Tok'ra Circuit
+- **Route legend** on wide terminals, auto-scroll to selected station
+- **Station info** — connection count, link levels, cumulative network bonuses
+- **Deploy direct** — select a station and Enter to deploy
+
+### New — Gate Link Upgrades (`u` in Network view)
+- **3 upgrade levels** per gate link: 50 / 150 / 400 ZPM
+- **Defense bonuses** from upgraded links: shield regen, damage boost, spawn reduction
+- **Faction-modified** — Ancient get 1.5x shield regen from links, Ori get 2x damage boost
+- **Ori discount** — gate upgrades cost 20% less for Ori players
+- Persisted in new `gate_links` SQLite table
+
+### New — Resource Transfers (`s` in Network view)
+- **Shield Boost** (30 ZPM) — +20 HP to all chairs on a planet (Ancient: +30 HP)
+- **Drone Boost** (50 ZPM) — +2 temporary bonus drones for 60s (Ori: 90s)
+- **ZPM Gift** (25 ZPM) — adds 25 to planet's bounty pool
+- Enables cooperative play from Atlantis — support active defenders remotely
+- Logged in new `resource_transfers` SQLite table
+
+### New — Deepened Faction Differentiation
+
+**Ancient Path — Network Masters:**
+- Gate shield regen 1.5x, gate spawn reduction 1.25x
+- Shield transfers 50% more effective
+- +10% ZPM earnings from kills
+- **Ascension Pulse** passive (chair level 5+): heals all friendly chairs +3 HP every 5 seconds
+- **Adaptive Targeting**: drones retarget mid-flight to track moving enemies
+
+**Ori Path — Divine Firepower:**
+- Gate damage bonus 2x (divine wrath through the network)
+- Gate upgrades 20% cheaper (zealotry efficiency)
+- Drone boost transfers last 50% longer
+- **Prior's Wrath** passive (chair level 5+): AOE 2 damage to all replicators within radius 8 every 8 seconds
+- **Locked Trajectory**: drones commit to initial target vector (no retargeting)
+
+### New — Cross-Navigation
+- Galaxy (`g`), Astro (`a`), and Network (`n`) views are cross-navigable from each other
+- All three accessible from Atlantis hub
+- Atlantis bottom bar updated with new key hints
+
+### Changed
+- Planet positions now stored in data model (previously calculated then discarded)
+- Network topology auto-generated from planet positions (MST + short-edge redundancy)
+- Throne view shows passive ability info, gate affinity stats, and drone targeting mode
+- Network bonuses applied at defense tick time (shield regen, damage boost, spawn reduction)
+- Bonus drones from transfers expire after TTL countdown
+
+### Database
+- Migration 9: `gate_links` table (from_id, to_id, level, upgraded_by, upgraded_at)
+- Migration 10: `resource_transfers` table (sender_fp, target_planet_id, bonus_type, amount)
+
+### New Files
+- `internal/game/network.go` — GateLink, GateRoute, GalaxyNetwork, transfer/upgrade constants
+- `internal/tui/views/astro.go` — AstroModel + RenderAstro
+- `internal/tui/views/network.go` — NetworkModel + RenderNetwork
+- `internal/tui/views/draw.go` — Bresenham line drawing, grid string helpers
+- `internal/store/network.go` — Gate link and transfer persistence
+
+---
+
 ## v3.3.0 — Factions, Tactics & Galaxy Events (2026-03-13)
 
 Full drone upgrade overhaul, Ancient vs Ori factions, drone tactics, galaxy events, New Game+.

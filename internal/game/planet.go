@@ -1,5 +1,7 @@
 package game
 
+import "ssh-gatewars/internal/core"
+
 // PlanetStatus tracks the state of a planet in the galaxy.
 type PlanetStatus int
 
@@ -14,6 +16,7 @@ type Planet struct {
 	ID             int
 	Name           string
 	Seed           int64
+	Pos            core.Vec2 // position in galaxy space
 	Status         PlanetStatus
 	InvasionLevel  int  // difficulty 1-10
 	DefenderCount  int  // current number of players

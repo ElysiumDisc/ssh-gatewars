@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -53,6 +54,8 @@ type Model struct {
 	throne   views.ThroneModel
 	galaxy   views.GalaxyModel
 	defense  views.DefenseModel
+	astro    views.AstroModel
+	network  views.NetworkModel
 	chatView views.ChatModel
 
 	// Chat input
@@ -84,6 +87,8 @@ func NewModel(cfg ModelConfig) *Model {
 		throne:      views.NewThroneModel(),
 		galaxy:      views.NewGalaxyModel(),
 		defense:     views.NewDefenseModel(),
+		astro:       views.NewAstroModel(),
+		network:     views.NewNetworkModel(),
 		chatView:    views.NewChatModel(),
 		chatMessages: make([]chat.ChatMessage, 0, 100),
 		activePlanetID: -1,
@@ -147,6 +152,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.handleDefenseEnd(snap)
 			}
 		}
+		// Refresh galaxy snapshot for map views
+		if m.state == StateAstro {
+			m.astro.Snapshot = m.engine.GetGalaxySnapshot()
+			m.astro.Tick()
+		}
+		if m.state == StateNetwork {
+			m.network.Snapshot = m.engine.GetGalaxySnapshot()
+			m.network.Tick()
+		}
 		m.splash.Tick()
 		m.throne.Tick()
 		m.frameCount++
@@ -205,6 +219,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "g":
 			m.state = StateGalaxy
 			m.galaxy.Reset(m.engine.GetGalaxySnapshot())
+		case "a":
+			m.state = StateAstro
+			m.astro.Reset(m.engine.GetGalaxySnapshot())
+		case "n":
+			m.state = StateNetwork
+			m.network.Reset(m.engine.GetGalaxySnapshot())
 		case "c":
 			m.chatMode = true
 		case "q":
@@ -229,6 +249,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if planetID >= 0 {
 				m.deployToPlanet(planetID)
 			}
+		case "a":
+			m.state = StateAstro
+			m.astro.Reset(m.engine.GetGalaxySnapshot())
+		case "n":
+			m.state = StateNetwork
+			m.network.Reset(m.engine.GetGalaxySnapshot())
 		case "c":
 			m.chatMode = true
 		}
@@ -251,6 +277,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setTactic(game.TacticPerimeter)
 		}
 		return m, nil
+
+	case StateAstro:
+		return m.handleAstroInput(msg)
+
+	case StateNetwork:
+		return m.handleNetworkInput(msg)
 	}
 
 	return m, nil
@@ -496,6 +528,174 @@ func (m *Model) cleanup() {
 	}
 }
 
+func (m *Model) handleAstroInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "q", "esc":
+		m.state = StateAtlantis
+	case "up", "k":
+		m.astro.Pan(0, -3)
+	case "down", "j":
+		m.astro.Pan(0, 3)
+	case "left", "h":
+		m.astro.Pan(-3, 0)
+	case "right", "l":
+		m.astro.Pan(3, 0)
+	case "+", "=":
+		m.astro.ZoomIn()
+	case "-":
+		m.astro.ZoomOut()
+	case "tab":
+		m.astro.CycleSelection(1)
+	case "enter":
+		planetID := m.astro.SelectedPlanetID()
+		if planetID >= 0 {
+			m.deployToPlanet(planetID)
+		}
+	case "g":
+		m.state = StateGalaxy
+		m.galaxy.Reset(m.engine.GetGalaxySnapshot())
+	case "n":
+		m.state = StateNetwork
+		m.network.Reset(m.engine.GetGalaxySnapshot())
+	case "c":
+		m.chatMode = true
+	}
+	return m, nil
+}
+
+func (m *Model) handleNetworkInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	// Mode-specific input
+	switch m.network.Mode {
+	case views.NetworkUpgrade:
+		switch key {
+		case "esc":
+			m.network.Mode = views.NetworkBrowse
+			m.network.UpgradeLink = -1
+		case "left", "h":
+			m.network.CycleUpgradeLink(-1)
+		case "right", "l":
+			m.network.CycleUpgradeLink(1)
+		case "enter":
+			m.executeGateUpgrade()
+		}
+		return m, nil
+
+	case views.NetworkTransfer:
+		switch key {
+		case "esc":
+			m.network.Mode = views.NetworkBrowse
+		case "1":
+			m.executeTransfer(game.TransferShieldBoost)
+		case "2":
+			m.executeTransfer(game.TransferDroneBoost)
+		case "3":
+			m.executeTransfer(game.TransferZPMDrop)
+		}
+		return m, nil
+	}
+
+	// Browse mode
+	switch key {
+	case "q", "esc":
+		m.state = StateAtlantis
+	case "up", "k":
+		m.network.MoveSelection(-1)
+	case "down", "j":
+		m.network.MoveSelection(1)
+	case "enter":
+		planetID := m.network.SelectedPlanetID()
+		if planetID >= 0 {
+			m.deployToPlanet(planetID)
+		}
+	case "u":
+		m.network.Mode = views.NetworkUpgrade
+		m.network.CycleUpgradeLink(0) // select first link
+	case "s":
+		pid := m.network.SelectedPlanetID()
+		if pid >= 0 {
+			m.network.Mode = views.NetworkTransfer
+			m.network.TransferTarget = pid
+		}
+	case "g":
+		m.state = StateGalaxy
+		m.galaxy.Reset(m.engine.GetGalaxySnapshot())
+	case "a":
+		m.state = StateAstro
+		m.astro.Reset(m.engine.GetGalaxySnapshot())
+	case "c":
+		m.chatMode = true
+	}
+	return m, nil
+}
+
+func (m *Model) executeGateUpgrade() {
+	if m.network.UpgradeLink < 0 || m.network.Snapshot == nil {
+		return
+	}
+	if m.network.UpgradeLink >= len(m.network.Snapshot.Links) {
+		return
+	}
+	link := m.network.Snapshot.Links[m.network.UpgradeLink]
+	newLevel := link.Level + 1
+	if newLevel >= len(game.GateLinkUpgradeCosts) {
+		m.network.SetStatus("Link already at max level!", views.StyleDim)
+		return
+	}
+	baseCost := game.GateLinkUpgradeCosts[newLevel]
+	// Apply faction discount (Ori get cheaper gate upgrades)
+	cost := baseCost
+	if m.player != nil {
+		fDef := game.FactionDefs[game.Faction(m.player.Faction)]
+		if fDef.GateUpgradeDisc > 0 {
+			cost = baseCost - int(float64(baseCost)*fDef.GateUpgradeDisc)
+			if cost < 1 {
+				cost = 1
+			}
+		}
+	}
+	ok, err := m.store.SpendZPM(m.session.SSHKey, cost)
+	if err != nil || !ok {
+		m.network.SetStatus("Not enough ZPM!", views.StyleDanger)
+		return
+	}
+	fromID := game.MinI(link.FromID, link.ToID)
+	toID := game.MaxI(link.FromID, link.ToID)
+	m.store.UpgradeGateLink(fromID, toID, newLevel, m.session.SSHKey)
+	m.engine.SetGateLinkLevel(fromID, toID, newLevel)
+	m.loadPlayer()
+	m.network.SetStatus(fmt.Sprintf("Gate link upgraded to level %d!", newLevel), views.StyleSuccess)
+	m.network.Mode = views.NetworkBrowse
+	m.network.UpgradeLink = -1
+}
+
+func (m *Model) executeTransfer(bonus game.TransferBonus) {
+	pid := m.network.TransferTarget
+	if pid < 0 {
+		return
+	}
+	cost := game.TransferCosts[bonus]
+	ok, err := m.store.SpendZPM(m.session.SSHKey, cost)
+	if err != nil || !ok {
+		m.network.SetStatus("Not enough ZPM!", views.StyleDanger)
+		m.network.Mode = views.NetworkBrowse
+		return
+	}
+	m.engine.SendTransfer(pid, bonus)
+	m.store.RecordTransfer(m.session.SSHKey, pid, int(bonus), cost)
+	m.loadPlayer()
+
+	names := map[game.TransferBonus]string{
+		game.TransferShieldBoost: "Shield Boost",
+		game.TransferDroneBoost:  "Drone Boost",
+		game.TransferZPMDrop:     "ZPM Gift",
+	}
+	m.network.SetStatus(names[bonus]+" sent!", views.StyleSuccess)
+	m.network.Mode = views.NetworkBrowse
+}
+
 // View renders the current state.
 func (m *Model) View() string {
 	switch m.state {
@@ -511,6 +711,10 @@ func (m *Model) View() string {
 		return views.RenderGalaxy(m.galaxy, m.width, m.height)
 	case StateDefense:
 		return views.RenderDefense(m.defenseSnap, m.chatMessages, m.chatInput, m.chatMode, m.chatVisible, m.frameCount, m.session.SSHKey, m.width, m.height)
+	case StateAstro:
+		return views.RenderAstro(m.astro, m.width, m.height)
+	case StateNetwork:
+		return views.RenderNetwork(m.network, m.width, m.height)
 	}
 	return ""
 }

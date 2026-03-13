@@ -49,6 +49,9 @@ type Engine struct {
 	// Atomic snapshot for lock-free TUI reads
 	galaxySnap atomic.Value // *GalaxySnapshot
 
+	// Stargate network upgrade levels (persisted)
+	gateLinkLevels map[[2]int]int // [min(from,to), max(from,to)] → level
+
 	// Surge system
 	surgeTimer    int // ticks until next surge rotation
 	surgePlanetID int // currently surging planet (-1 = none)
@@ -62,6 +65,8 @@ type Engine struct {
 // GalaxySnapshot is a read-only view of the galaxy for TUI rendering.
 type GalaxySnapshot struct {
 	Planets   []PlanetSnap
+	Links     []GateLinkSnap
+	Routes    []GateRouteSnap
 	Cycle     int // new game+ cycle
 	FreePct   int // percentage of galaxy liberated
 	SurgeID   int // planet ID currently surging (-1 = none)
@@ -70,11 +75,28 @@ type GalaxySnapshot struct {
 type PlanetSnap struct {
 	ID            int
 	Name          string
+	Pos           core.Vec2
 	Status        game.PlanetStatus
 	InvasionLevel int
 	DefenderCount int
 	Surging       bool
 	BountyZPM     int
+}
+
+// GateLinkSnap is a snapshot of a Stargate link for rendering.
+type GateLinkSnap struct {
+	FromID  int
+	ToID    int
+	Level   int
+	RouteID int
+}
+
+// GateRouteSnap is a snapshot of a named route for rendering.
+type GateRouteSnap struct {
+	ID      int
+	Name    string
+	Color   string
+	Planets []int
 }
 
 // NewEngine creates the game engine.
@@ -92,14 +114,15 @@ func NewEngine(cfg core.GameConfig) *Engine {
 	}
 
 	e := &Engine{
-		cfg:           cfg,
-		Galaxy:        galaxy,
-		instances:     make(map[int]*DefenseInstance),
-		GameEvents:    make(chan GameEvent, 100),
-		surgePlanetID: -1,
-		surgeTimer:    cfg.SurgeIntervalSec * cfg.TickRate, // first surge after interval
-		rng:           rand.New(rand.NewSource(seed)),
-		cycle:         1,
+		cfg:            cfg,
+		Galaxy:         galaxy,
+		instances:      make(map[int]*DefenseInstance),
+		GameEvents:     make(chan GameEvent, 100),
+		gateLinkLevels: make(map[[2]int]int),
+		surgePlanetID:  -1,
+		surgeTimer:     cfg.SurgeIntervalSec * cfg.TickRate, // first surge after interval
+		rng:            rand.New(rand.NewSource(seed)),
+		cycle:          1,
 	}
 
 	e.updateGalaxySnapshot()
@@ -265,6 +288,12 @@ func (e *Engine) DeployChair(planetID int, fp, callsign string, level int, tier 
 		e.instances[planetID] = inst
 	}
 
+	// Apply network bonuses with faction affinity
+	bonus := e.computeNetworkBonusForFaction(planetID, faction)
+	inst.NetDamageBoost = bonus.DamageBoost
+	inst.NetSpawnReduction = bonus.SpawnReduction
+	inst.NetShieldRegen = bonus.ShieldRegen
+
 	inst.AddChair(fp, callsign, level, tier, faction)
 	planet.DefenderCount = len(inst.Chairs)
 
@@ -354,6 +383,7 @@ func (e *Engine) updateGalaxySnapshot() {
 		snap.Planets[i] = PlanetSnap{
 			ID:            p.ID,
 			Name:          p.Name,
+			Pos:           p.Pos,
 			Status:        p.Status,
 			InvasionLevel: p.InvasionLevel,
 			DefenderCount: p.DefenderCount,
@@ -361,6 +391,33 @@ func (e *Engine) updateGalaxySnapshot() {
 			BountyZPM:     p.BountyZPM,
 		}
 	}
+
+	// Stargate network links
+	if net := e.Galaxy.Network; net != nil {
+		snap.Links = make([]GateLinkSnap, len(net.Links))
+		for i, l := range net.Links {
+			key := [2]int{game.MinI(l.FromID, l.ToID), game.MaxI(l.FromID, l.ToID)}
+			level := e.gateLinkLevels[key]
+			snap.Links[i] = GateLinkSnap{
+				FromID:  l.FromID,
+				ToID:    l.ToID,
+				Level:   level,
+				RouteID: l.RouteID,
+			}
+		}
+		snap.Routes = make([]GateRouteSnap, len(net.Routes))
+		for i, r := range net.Routes {
+			planets := make([]int, len(r.Planets))
+			copy(planets, r.Planets)
+			snap.Routes[i] = GateRouteSnap{
+				ID:      r.ID,
+				Name:    r.Name,
+				Color:   r.Color,
+				Planets: planets,
+			}
+		}
+	}
+
 	e.galaxySnap.Store(snap)
 }
 
@@ -368,6 +425,100 @@ func (e *Engine) emitEvent(ev GameEvent) {
 	select {
 	case e.GameEvents <- ev:
 	default:
+	}
+}
+
+// SetGateLinkLevel updates a gate link's level in the engine state.
+func (e *Engine) SetGateLinkLevel(fromID, toID, level int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	key := [2]int{fromID, toID}
+	e.gateLinkLevels[key] = level
+}
+
+// GetNetworkBonus computes total gate link bonuses for a planet.
+func (e *Engine) GetNetworkBonus(planetID int) game.GateLinkBonus {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.computeNetworkBonus(planetID)
+}
+
+func (e *Engine) computeNetworkBonus(planetID int) game.GateLinkBonus {
+	var total game.GateLinkBonus
+	if e.Galaxy.Network == nil {
+		return total
+	}
+	for _, l := range e.Galaxy.Network.Links {
+		if l.FromID == planetID || l.ToID == planetID {
+			key := [2]int{game.MinI(l.FromID, l.ToID), game.MaxI(l.FromID, l.ToID)}
+			level := e.gateLinkLevels[key]
+			if level > 0 && level < len(game.GateLinkBonuses) {
+				b := game.GateLinkBonuses[level]
+				total.ShieldRegen += b.ShieldRegen
+				total.DamageBoost += b.DamageBoost
+				total.SpawnReduction += b.SpawnReduction
+			}
+		}
+	}
+	if total.SpawnReduction > 0.5 {
+		total.SpawnReduction = 0.5
+	}
+	return total
+}
+
+// computeNetworkBonusForFaction applies faction multipliers to network bonuses.
+func (e *Engine) computeNetworkBonusForFaction(planetID int, faction game.Faction) game.GateLinkBonus {
+	base := e.computeNetworkBonus(planetID)
+	f := game.FactionDefs[faction]
+	base.ShieldRegen *= f.GateShieldMult
+	base.DamageBoost *= f.GateDamageMult
+	base.SpawnReduction *= f.GateSpawnMult
+	if base.SpawnReduction > 0.5 {
+		base.SpawnReduction = 0.5
+	}
+	return base
+}
+
+// SendTransfer applies a resource transfer bonus to a planet's defense.
+func (e *Engine) SendTransfer(planetID int, bonus game.TransferBonus) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	inst, ok := e.instances[planetID]
+	if !ok {
+		// No active defense — if ZPM gift, add to bounty
+		if bonus == game.TransferZPMDrop && planetID >= 0 && planetID < len(e.Galaxy.Planets) {
+			e.Galaxy.Planets[planetID].BountyZPM += 25
+		}
+		return
+	}
+
+	switch bonus {
+	case game.TransferShieldBoost:
+		// +20 shield HP to all chairs (capped at max), faction-modified
+		for _, c := range inst.Chairs {
+			fDef := game.FactionDefs[c.Faction]
+			heal := int(20.0 * fDef.TransferShieldMul)
+			c.ShieldHP += heal
+			if c.ShieldHP > c.MaxShield {
+				c.ShieldHP = c.MaxShield
+			}
+		}
+	case game.TransferDroneBoost:
+		// Temporary bonus drones — duration varies by faction
+		inst.BonusDrones += 2
+		baseTTL := 600 // 60 seconds at 10Hz
+		// Apply faction multiplier from first chair's faction
+		if len(inst.Chairs) > 0 {
+			fDef := game.FactionDefs[inst.Chairs[0].Faction]
+			baseTTL = int(float64(baseTTL) * fDef.TransferDroneMul)
+		}
+		inst.BonusDroneTTL = baseTTL
+	case game.TransferZPMDrop:
+		// Add to planet bounty pool
+		if planetID >= 0 && planetID < len(e.Galaxy.Planets) {
+			e.Galaxy.Planets[planetID].BountyZPM += 25
+		}
 	}
 }
 

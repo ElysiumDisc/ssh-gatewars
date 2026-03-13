@@ -10,4 +10,6 @@ const (
 	StateThrone                // Ancient Chair upgrade terminal
 	StateGalaxy                // Astroterm-style galaxy browser
 	StateDefense               // Radial defense view — the game
+	StateAstro                 // Astrologic view — 2D star map
+	StateNetwork               // Stargate Network view — tube map
 )

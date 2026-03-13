@@ -154,6 +154,47 @@ func RenderThrone(player *store.PlayerRecord, throne ThroneModel, frameCount, w,
 	)
 	leftLines = append(leftLines, "")
 
+	// Faction passive ability info
+	if factionDef.PassiveName != "" {
+		leftLines = append(leftLines, "  "+StyleCyanDim.Render("── PASSIVE ABILITY ──"))
+		passiveStyle := StyleCyan
+		if faction == game.FactionOri {
+			passiveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6600"))
+		}
+		leftLines = append(leftLines, "  "+passiveStyle.Render(factionDef.PassiveName))
+		for _, line := range wrapText(factionDef.PassiveDesc, leftW-6) {
+			leftLines = append(leftLines, "  "+StyleDim.Render(line))
+		}
+		if player.ChairLevel >= factionDef.PassiveUnlockLv {
+			leftLines = append(leftLines, "  "+StyleSuccess.Render("ACTIVE"))
+		} else {
+			leftLines = append(leftLines,
+				"  "+StyleDim.Render(fmt.Sprintf("Unlock at chair level %d", factionDef.PassiveUnlockLv)))
+		}
+		leftLines = append(leftLines, "")
+	}
+
+	// Network affinity info
+	leftLines = append(leftLines, "  "+StyleCyanDim.Render("── GATE AFFINITY ──"))
+	if factionDef.GateDamageMult > 1.0 {
+		leftLines = append(leftLines, "  "+StyleGold.Render(fmt.Sprintf("Gate Damage: %.0fx", factionDef.GateDamageMult)))
+	}
+	if factionDef.GateShieldMult > 1.0 {
+		leftLines = append(leftLines, "  "+StyleSuccess.Render(fmt.Sprintf("Gate Shield: %.1fx", factionDef.GateShieldMult)))
+	}
+	if factionDef.GateUpgradeDisc > 0 {
+		leftLines = append(leftLines, "  "+StyleGold.Render(fmt.Sprintf("Upgrade Cost: -%d%%", int(factionDef.GateUpgradeDisc*100))))
+	}
+	if factionDef.ZPMEarnMult > 1.0 {
+		leftLines = append(leftLines, "  "+StyleGold.Render(fmt.Sprintf("ZPM Earn: +%d%%", int((factionDef.ZPMEarnMult-1)*100))))
+	}
+	if factionDef.DroneRetarget {
+		leftLines = append(leftLines, "  "+StyleCyan.Render("Drones: Adaptive Targeting"))
+	} else {
+		leftLines = append(leftLines, "  "+lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6600")).Render("Drones: Locked Trajectory"))
+	}
+	leftLines = append(leftLines, "")
+
 	// Power preview — next level
 	if player.ChairLevel < MaxChairLevel {
 		nextLv := player.ChairLevel + 1

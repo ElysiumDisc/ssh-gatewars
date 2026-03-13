@@ -11,6 +11,7 @@ import (
 // Galaxy holds the shared state of all planets.
 type Galaxy struct {
 	Planets []*Planet
+	Network *GalaxyNetwork
 	Seed    int64
 }
 
@@ -29,7 +30,7 @@ func NewGalaxy(seed int64, numPlanets int) *Galaxy {
 		// Place planets in a spiral pattern for visual interest
 		angle := float64(i) * 2.4 // golden angle in radians
 		radius := 2.0 + math.Sqrt(float64(i))*3.0
-		_ = core.Vec2{
+		pos := core.Vec2{
 			X: math.Cos(angle) * radius,
 			Y: math.Sin(angle) * radius,
 		}
@@ -38,15 +39,18 @@ func NewGalaxy(seed int64, numPlanets int) *Galaxy {
 			ID:            i,
 			Name:          name,
 			Seed:          seed + int64(i*7919), // deterministic per-planet seed
+			Pos:           pos,
 			Status:        PlanetInvaded,
 			InvasionLevel: 1 + (i % 10), // difficulty scales
 		}
 	}
 
-	return &Galaxy{
+	g := &Galaxy{
 		Planets: planets,
 		Seed:    seed,
 	}
+	g.Network = GenerateNetwork(g.Planets)
+	return g
 }
 
 // FreePlanet marks a planet as liberated.
